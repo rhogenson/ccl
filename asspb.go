@@ -1,8 +1,119 @@
-// Me: Mom can we have textproto?
+//	Me: Mom can we have textproto?
+//	Mom: no we have textproto at home
+//	textproto at home:
 //
-// Mom: no we have textproto at home
+// The asspb language has similar semantics to JSON, the only exception being the lack of null.
 //
-// textproto at home:
+// # Comments
+//
+// There are two types of comments, line comments and C-style comments. Line
+// comments are written with # or //, and extend from there to the end of the
+// line. C-style comments are written with /* and */, and like C they may not
+// be nested.
+//
+//	# Comments are important
+//	// in a configuration language
+//	/* what do I know */
+//
+// # Numbers
+//
+// Numbers are written in base 10 and can optionally have a fractional part or
+// an exponent written with "e". As a special case, a number prefixed with "0x"
+// can be written in base 16.
+//
+//	100
+//	-30
+//	0xabc
+//	-0xdef
+//	13.5
+//	1e100
+//
+// # Strings
+//
+// Strings are written with " or ' and any sequence of intermediate bytes (with
+// the exception of escape sequences which are described below). "any bytes"
+// means that strings can contain newline without needing an escape sequence
+//
+//	'asdf'
+//	"that's cool"
+//	"\tall\n\tyour\n\tfavorite\n\tescape\n\tsequences"
+//
+//	'a multiline
+//	string'
+//
+// Backslash characters inside a string are interpreted as an escape sequence.
+// Any escape sequence not described below is an error. The escape sequences
+// are identical to C11, with the exception that \x always takes exactly 2
+// hex characters.
+//
+//	\'    single quote       0x27
+//	\"    double quote       0x22
+//	\?    question mark      0x3f (why is this in C)
+//	\\    backslash          0x5c
+//	\a    bell               0x07
+//	\b    backspace          0x07
+//	\f    form feed          0x0c
+//	\n    newline            0x0a
+//	\r    carriage return    0x0d
+//	\t    tab                0x09
+//	\v    vertical tab       0x0b
+//
+//	\nnn          3-digit octal value nnn
+//	\xnn          2-digit hex value nn
+//	\unnnn        unicode code point U+nnnn
+//	\Unnnnnnnn    unicode code point U+nnnnnnnn
+//
+// # Bool
+//
+// Bool values can be true or false (classic), and are written using one of the
+// below strings.
+//
+//	true
+//	yes
+//	on
+//
+//	false
+//	no
+//	off
+//
+// # Lists
+//
+// Lists are written with square brackets and elements are separated by comma.
+//
+//	[1, 2, 3]
+//	[{nested: "messages"}, {are: "also"}, {allowed: yes}]
+//
+// Trailing comma is allowed
+//
+//	[
+//	  "suck",
+//	  "it",
+//	  "JSON",
+//	]
+//
+// # Messages
+//
+// Messages are an unordered set of key-value pairs:
+//
+//	{key1: "value1" key2: "value2"}
+//
+// Keys can be alphanumeric or use underscore; no other characters are
+// permitted. Values can be any of the value types here described.
+//
+// As a special case, when a key is written more than once in a message, it's
+// treated the same as if the values had been written in a list. If some of the
+// values are already lists, they are appended, preserving the order in which
+// the values appear in the input file.
+//
+//	{
+//	  key: [1, 2]
+//	  key: 3
+//	  key: [4, 5, 6]
+//	}
+//	# equivalent to
+//	{
+//	  key: [1, 2, 3, 4, 5, 6]
+//	}
 package asspb
 
 import (
@@ -97,6 +208,8 @@ func unescape(idx int, rawStr []byte) (string, error) {
 			return []byte("'")
 		case `\"`:
 			return []byte(`"`)
+		case `\?`:
+			return []byte("?")
 		case `\\`:
 			return []byte(`\`)
 		case `\a`:
@@ -295,6 +408,12 @@ func (p *parser) parse() (map[string]any, error) {
 // internally calls json.Unmarshal for the reflection-based struct unpacking, so
 // feel free to use json struct tags on v, or implement UnmarshalJSON to control
 // the unmarshalling behavior.
+//
+// Unmarshal accepts a top-level message, which is equivalent to the "message"
+// type described above, but without the surrounding braces. For example:
+//
+//	key1: "val1"
+//	key2: "val2"
 func Unmarshal(data []byte, v any) error {
 	p := &parser{data: data}
 	m, err := p.parse()
