@@ -301,11 +301,9 @@ func Unmarshal(data []byte, v any) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s: %v\n", data, m)
 	jsonBytes, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s: %s\n", data, jsonBytes)
 	return json.Unmarshal(jsonBytes, v)
 }
