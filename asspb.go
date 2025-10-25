@@ -36,7 +36,7 @@ type parser struct {
 	i    int
 }
 
-var spaceRE = regexp.MustCompile(`^([[:space:]\p{Zs}]|#[^\n]*)*`)
+var spaceRE = regexp.MustCompile(`^([[:space:]\p{Zs}]|(#|//)[^\n]*|/\*([^*]|\*[^/])*\**\*/)*`)
 
 func (p *parser) skipSpace() {
 	p.i += len(spaceRE.Find(p.data[p.i:]))

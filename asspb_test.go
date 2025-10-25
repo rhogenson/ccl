@@ -162,6 +162,14 @@ field: 2`,
 		desc: "ListOfMessage",
 		msg:  `field: [{}]`,
 		want: map[string]any{"field": []any{map[string]any{}}},
+	}, {
+		desc: "CStyleComment",
+		msg:  `field: /** inline comment **/ {}`,
+		want: map[string]any{"field": map[string]any{}},
+	}, {
+		desc: "CStyleLineComment",
+		msg:  `field: {} // line comment`,
+		want: map[string]any{"field": map[string]any{}},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
