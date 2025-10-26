@@ -18,8 +18,8 @@
 // # Numbers
 //
 // Numbers are written in base 10 and can optionally have a fractional part or
-// an exponent written with "e". As a special case, a number prefixed with "0x"
-// can be written in base 16.
+// an exponent written with "e" or "E". As a special case, a number prefixed
+// with "0x" or "0X" can be written in base 16.
 //
 //	100
 //	-30
@@ -27,6 +27,9 @@
 //	-0xdef
 //	13.5
 //	1e100
+//
+// Leading zeros are not permitted in decimal numbers, due to potential
+// confusion with octal (which is not supported).
 //
 // # Strings
 //
@@ -189,7 +192,7 @@ func (p *parser) parseLit(s string) bool {
 	return false
 }
 
-var numRE = regexp.MustCompile(`^-?(0x[0-9a-fA-F]+|([0-9]+(\.[0-9]*)?|\.[0-9]+)(e-?[0-9]+)?)`)
+var numRE = regexp.MustCompile(`^[-+]?(0[xX][0-9a-fA-F]+|((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?)`)
 
 func (p *parser) parseNum() (any, bool) {
 	p.skipSpace()
@@ -197,7 +200,7 @@ func (p *parser) parseNum() (any, bool) {
 	if numBytes == nil {
 		return nil, false
 	}
-	if bytes.ContainsAny(numBytes, ".e") {
+	if bytes.ContainsAny(numBytes, ".eE") {
 		n, err := strconv.ParseFloat(string(numBytes), 64)
 		if err != nil {
 			return nil, false
@@ -205,8 +208,8 @@ func (p *parser) parseNum() (any, bool) {
 		p.i += len(numBytes)
 		return n, true
 	}
-	if b, ok := bytes.CutPrefix(numBytes, []byte("0x")); ok {
-		n, err := strconv.ParseInt(string(b), 16, 64)
+	if bytes.HasPrefix(numBytes, []byte("0x")) || bytes.HasPrefix(numBytes, []byte("0X")) {
+		n, err := strconv.ParseInt(string(numBytes[2:]), 16, 64)
 		if err != nil {
 			return nil, false
 		}

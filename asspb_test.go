@@ -43,17 +43,37 @@ field_repeated [5, 6]
 can just span multiple lines"`,
 		want: map[string]any{"field": "strings\ncan just span multiple lines"},
 	}, {
+		desc: "Zero",
+		msg:  `field: 0`,
+		want: map[string]any{"field": 0.},
+	}, {
 		desc: "Hex",
 		msg:  `field: 0xff`,
 		want: map[string]any{"field": 255.},
+	}, {
+		desc: "CapitalHex",
+		msg:  `field: 0XfF`,
+		want: map[string]any{"field": 255.},
+	}, {
+		desc: "HexLeadingZero",
+		msg:  `field: 0x0f`,
+		want: map[string]any{"field": 15.},
 	}, {
 		desc: "Float",
 		msg:  `field: 1.5e10`,
 		want: map[string]any{"field": 1.5e10},
 	}, {
+		desc: "FloatCapitalE",
+		msg:  `field: 1.5E10`,
+		want: map[string]any{"field": 1.5e10},
+	}, {
 		desc: "NegativeFloat",
 		msg:  `field: -1.5e-10`,
 		want: map[string]any{"field": -1.5e-10},
+	}, {
+		desc: "PositiveFloat",
+		msg:  `field: +1.5e+10`,
+		want: map[string]any{"field": 1.5e10},
 	}, {
 		desc: "Int",
 		msg:  `field: 10`,
@@ -62,6 +82,10 @@ can just span multiple lines"`,
 		desc: "NegativeInt",
 		msg:  `field: -10`,
 		want: map[string]any{"field": -10.},
+	}, {
+		desc: "PositiveInt",
+		msg:  `field: +10`,
+		want: map[string]any{"field": 10.},
 	}, {
 		desc: "String",
 		msg:  `field: 'asdf'`,
@@ -238,6 +262,9 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "ListBadMsgVal",
 		msg:  `field [{asdf}]`,
+	}, {
+		desc: "IntLeadingZero",
+		msg:  `field: 0644`,
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
