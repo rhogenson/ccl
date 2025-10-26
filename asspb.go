@@ -34,12 +34,14 @@
 // # Strings
 //
 // Strings are written with " or ' and any sequence of intermediate bytes (with
-// the exception of escape sequences which are described below). "any bytes"
-// means that strings can contain newline without needing an escape sequence
+// the exception of escape sequences which are described below). Strings must be
+// valid UTF-8 after escape sequences are expanded.
 //
 //	'asdf'
 //	"that's cool"
 //	"\tall\n\tyour\n\tfavorite\n\tescape\n\tsequences"
+//
+// Note that strings can contain newline without needing an escape sequence
 //
 //	'a multiline
 //	string'
@@ -64,7 +66,7 @@
 //	\nnn          3-digit octal value nnn
 //	\xnn          2-digit hex value nn
 //	\unnnn        unicode code point U+nnnn
-//	\Unnnnnnnn    unicode code point U+nnnnnnnn
+//	\Unnnnnnnn    unicode code point U+nnnnnnnn (UTF8)
 //
 // As an extension to the C11 escapes, a backslash immediately before a newline
 // character (0x0a) will remove the newline character from the resulting string
@@ -259,27 +261,43 @@ func unescape(idx int, rawStr []byte) ([]byte, error) {
 		case "\\\n", "\\\r\n":
 			return nil
 		}
-		if bytes.HasPrefix(escape, []byte(`\x`)) || bytes.HasPrefix(escape, []byte(`\u`)) || bytes.HasPrefix(escape, []byte(`\U`)) {
-			var n int64
-			if n, err = strconv.ParseInt(string(escape[2:]), 16, 32); err != nil {
+		switch {
+		case bytes.HasPrefix(escape, []byte(`\x`)):
+			var n uint64
+			if n, err = strconv.ParseUint(string(escape[2:]), 16, 8); err != nil {
 				err = fmt.Errorf("%d: syntax error: invalid hex escape %q: %s", idx, escape, err)
 				return nil
 			}
+			return []byte{byte(n)}
+		case bytes.HasPrefix(escape, []byte(`\u`)), bytes.HasPrefix(escape, []byte(`\U`)):
+			var n int64
+			if n, err = strconv.ParseInt(string(escape[2:]), 16, 32); err != nil {
+				err = fmt.Errorf("%d: syntax error: invalid unicode escape %q: %s", idx, escape, err)
+				return nil
+			}
 			return utf8.AppendRune(nil, rune(n))
+		default:
+			if len(escape) != 4 {
+				err = fmt.Errorf("%d: syntax error: invalid string escape %q", idx, escape)
+				return nil
+			}
+			var n int64
+			if n, err = strconv.ParseInt(string(escape[1:]), 8, 32); err != nil {
+				err = fmt.Errorf("%d: syntax error: invalid string escape %q", idx, escape)
+				return nil
+			}
+			if n > 255 {
+				err = fmt.Errorf("%d: invalid octal escape %q %d > 255", idx, escape, n)
+				return nil
+			}
+			return []byte{byte(n)}
 		}
-		if len(escape) != 4 {
-			err = fmt.Errorf("%d: syntax error: invalid string escape %q", idx, escape)
-			return nil
-		}
-		var n int64
-		if n, err = strconv.ParseInt(string(escape[1:]), 8, 32); err != nil {
-			err = fmt.Errorf("%d: syntax error: invalid string escape %q", idx, escape)
-			return nil
-		}
-		return utf8.AppendRune(nil, rune(n))
 	})
 	if err != nil {
 		return nil, err
+	}
+	if !utf8.Valid(escaped) {
+		return nil, fmt.Errorf("%d: syntax error: string %q is not UTF-8 encoded", idx, escaped)
 	}
 	return escaped, nil
 }

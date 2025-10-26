@@ -151,6 +151,10 @@ can just span multiple lines"`,
 		msg:  `field: '\x0a'`,
 		want: map[string]any{"field": "\n"},
 	}, {
+		desc: "StringHexHighByte",
+		msg:  `field: "\xe4\xb8\x96"`,
+		want: map[string]any{"field": "世"},
+	}, {
 		desc: "StringUnicode",
 		msg:  `field: '\u2014'`,
 		want: map[string]any{"field": "—"},
@@ -265,6 +269,12 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "IntLeadingZero",
 		msg:  `field: 0644`,
+	}, {
+		desc: "InvalidOctal",
+		msg:  `field: "\777"`,
+	}, {
+		desc: "InvalidUTF8",
+		msg:  `field: "\x80"`,
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
