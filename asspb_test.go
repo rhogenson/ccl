@@ -170,6 +170,15 @@ field: 2`,
 		desc: "CStyleLineComment",
 		msg:  `field: {} // line comment`,
 		want: map[string]any{"field": map[string]any{}},
+	}, {
+		desc: "ConcatStrings",
+		msg:  `field: 'that'"'"'s cool'`,
+		want: map[string]any{"field": "that's cool"},
+	}, {
+		desc: "RemoveNewline",
+		msg: `field: 'remove newline \
+from string'`,
+		want: map[string]any{"field": "remove newline from string"},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()

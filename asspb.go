@@ -63,6 +63,21 @@
 //	\unnnn        unicode code point U+nnnn
 //	\Unnnnnnnn    unicode code point U+nnnnnnnn
 //
+// As an extension to the C11 escapes, a backslash immediately before a newline
+// character (0x0a) will remove the newline character from the resulting string
+//
+//	'backslash also can \
+//	remove newlines'
+//	# equivalent to
+//	'backslash also can remove newlines'
+//
+// If multiple string literals are written next to each other with only
+// whitespace or comments in between, the result is to concatenate the strings
+//
+//	'multiple strings' " concatenated"
+//	# equivalent to
+//	'multiple strings concatenated'
+//
 // # Bool
 //
 // Bool values can be true or false (classic), and are written using one of the
@@ -98,7 +113,16 @@
 //	{key1: "value1" key2: "value2"}
 //
 // Keys can be alphanumeric or use underscore; no other characters are
-// permitted. Values can be any of the value types here described.
+// permitted. Values can be any of the value types here described. Key-value
+// pairs must be written with a : between the key and value, except when the
+// value is syntactically a list or a message (in that case the colon
+// is optional)
+//
+//	{
+//	  key1: "value1"
+//	  key2 {}
+//	  key3 []
+//	}
 //
 // As a special case, when a key is written more than once in a message, it's
 // treated the same as if the values had been written in a list. If some of the
@@ -122,6 +146,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -194,13 +219,13 @@ func (p *parser) parseNum() (any, bool) {
 	return n, true
 }
 
-var escapesRE = regexp.MustCompile(`\\(.|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`)
+var escapesRE = regexp.MustCompile(`(?s)\\(.|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`)
 
 func init() {
 	escapesRE.Longest()
 }
 
-func unescape(idx int, rawStr []byte) (string, error) {
+func unescape(idx int, rawStr []byte) ([]byte, error) {
 	var err error
 	escaped := escapesRE.ReplaceAllFunc(rawStr, func(escape []byte) []byte {
 		switch string(escape) {
@@ -226,6 +251,8 @@ func unescape(idx int, rawStr []byte) (string, error) {
 			return []byte("\t")
 		case `\v`:
 			return []byte("\v")
+		case "\\\n":
+			return nil
 		}
 		if bytes.HasPrefix(escape, []byte(`\x`)) || bytes.HasPrefix(escape, []byte(`\u`)) || bytes.HasPrefix(escape, []byte(`\U`)) {
 			var n int64
@@ -247,41 +274,44 @@ func unescape(idx int, rawStr []byte) (string, error) {
 		return utf8.AppendRune(nil, rune(n))
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(escaped), nil
+	return escaped, nil
 }
 
-var stringRE = regexp.MustCompile(`^(([^'\\]|\\.)*)'`)
+var (
+	stringRE       = regexp.MustCompile(`(?s)^(([^'\\]|\\.)*)'`)
+	doubleStringRE = regexp.MustCompile(`(?s)^(([^"\\]|\\.)*)"`)
+)
 
-func (p *parser) parseString() (string, error) {
-	p.skipSpace()
-	rawStr := stringRE.FindSubmatch(p.data[p.i:])
-	if rawStr == nil {
-		return "", fmt.Errorf("%d: syntax error: invalid string", p.i)
+func (p *parser) parseString(double bool) (string, error) {
+	re := stringRE
+	if double {
+		re = doubleStringRE
 	}
-	s, err := unescape(p.i, rawStr[1])
-	if err != nil {
-		return "", err
+	s := new(strings.Builder)
+	for {
+		p.skipSpace()
+		rawStr := re.FindSubmatch(p.data[p.i:])
+		if rawStr == nil {
+			return "", fmt.Errorf("%d: syntax error: invalid string", p.i)
+		}
+		ss, err := unescape(p.i, rawStr[1])
+		if err != nil {
+			return "", err
+		}
+		s.Write(ss)
+		p.i += len(rawStr[0])
+		switch {
+		case p.parseLit("'"):
+			re = stringRE
+			continue
+		case p.parseLit(`"`):
+			re = doubleStringRE
+			continue
+		}
+		return s.String(), nil
 	}
-	p.i += len(rawStr[0])
-	return s, nil
-}
-
-var doubleStringRE = regexp.MustCompile(`^(([^"\\]|\\.)*)"`)
-
-func (p *parser) parseDoubleString() (string, error) {
-	p.skipSpace()
-	rawStr := doubleStringRE.FindSubmatch(p.data[p.i:])
-	if rawStr == nil {
-		return "", fmt.Errorf("%d: syntax error: invalid string", p.i)
-	}
-	s, err := unescape(p.i, rawStr[1])
-	if err != nil {
-		return "", err
-	}
-	p.i += len(rawStr[0])
-	return s, nil
 }
 
 var fieldRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z_0-9]*`)
@@ -319,9 +349,9 @@ func (p *parser) parseVal() (any, error) {
 	case p.parseLit("["):
 		val, err = p.parseList()
 	case p.parseLit("'"):
-		val, err = p.parseString()
+		val, err = p.parseString(false)
 	case p.parseLit(`"`):
-		val, err = p.parseDoubleString()
+		val, err = p.parseString(true)
 	case p.parseLit("true"), p.parseLit("yes"), p.parseLit("on"):
 		val = true
 	case p.parseLit("false"), p.parseLit("no"), p.parseLit("off"):
