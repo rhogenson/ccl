@@ -87,6 +87,10 @@ can just span multiple lines"`,
 		msg:  `field: "\""`,
 		want: map[string]any{"field": `"`},
 	}, {
+		desc: "StringEscapeQuestionMark",
+		msg:  `field: "\?"`,
+		want: map[string]any{"field": "?"},
+	}, {
 		desc: "StringEscapeBackslash",
 		msg:  `field: '\\'`,
 		want: map[string]any{"field": `\`},
