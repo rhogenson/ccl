@@ -65,6 +65,8 @@
 //
 // As an extension to the C11 escapes, a backslash immediately before a newline
 // character (0x0a) will remove the newline character from the resulting string
+// (and for you Microsoft Windows users, backslash followed by \r\n is
+// also removed)
 //
 //	'backslash also can \
 //	remove newlines'
@@ -219,7 +221,7 @@ func (p *parser) parseNum() (any, bool) {
 	return n, true
 }
 
-var escapesRE = regexp.MustCompile(`(?s)\\(.|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`)
+var escapesRE = regexp.MustCompile(`(?s)\\(.|\r\n|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`)
 
 func init() {
 	escapesRE.Longest()
@@ -251,7 +253,7 @@ func unescape(idx int, rawStr []byte) ([]byte, error) {
 			return []byte("\t")
 		case `\v`:
 			return []byte("\v")
-		case "\\\n":
+		case "\\\n", "\\\r\n":
 			return nil
 		}
 		if bytes.HasPrefix(escape, []byte(`\x`)) || bytes.HasPrefix(escape, []byte(`\u`)) || bytes.HasPrefix(escape, []byte(`\U`)) {

@@ -183,6 +183,10 @@ field: 2`,
 		msg: `field: 'remove newline \
 from string'`,
 		want: map[string]any{"field": "remove newline from string"},
+	}, {
+		desc: "RemoveNewlineWindows",
+		msg:  "field: 'remove newline \\\r\nfrom string'",
+		want: map[string]any{"field": "remove newline from string"},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
