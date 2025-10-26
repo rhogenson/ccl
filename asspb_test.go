@@ -287,3 +287,21 @@ func TestUnmarshal_Invalid(t *testing.T) {
 		})
 	}
 }
+
+func TestUnmarshal_ErrorLineCol(t *testing.T) {
+	msg := `
+		###### This is a very important file please do not modify
+		#########################################################
+		################ The more ## I put the more secure it is######
+		secret:12345; # oops typo
+	`
+	err := Unmarshal([]byte(msg), new(map[string]any))
+	syntaxErr, ok := err.(*syntaxError)
+	if !ok {
+		t.Errorf("Unmarshal(%q): expected *syntaxError, got error %T %[2]v", msg, err)
+	}
+	want := &syntaxError{line: 5, col: 15}
+	if syntaxErr.line != want.line || syntaxErr.col != want.col {
+		t.Errorf("Unmarshal(%q) returned error %+v, want line %d, col %d", msg, syntaxErr, want.line, want.col)
+	}
+}

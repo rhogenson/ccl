@@ -179,6 +179,28 @@ type parser struct {
 	i    int
 }
 
+type syntaxError struct {
+	line, col int
+	reason    string
+}
+
+func (e *syntaxError) Error() string {
+	return fmt.Sprintf("%d:%d syntax error: %s", e.line, e.col, e.reason)
+}
+
+func (p *parser) error(reason string, args ...any) error {
+	line, col := 1, 1
+	for _, b := range p.data[:p.i] {
+		if b == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return &syntaxError{line, col, fmt.Sprintf(reason, args...)}
+}
+
 var spaceRE = regexp.MustCompile(`^([[:space:]\p{Zs}]|(#|//)[^\n]*|/\*([^*]|\*[^/])*\*?\*/)*`)
 
 func (p *parser) skipSpace() {
@@ -232,7 +254,7 @@ func init() {
 	escapesRE.Longest()
 }
 
-func unescape(idx int, rawStr []byte) ([]byte, error) {
+func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 	var err error
 	escaped := escapesRE.ReplaceAllFunc(rawStr, func(escape []byte) []byte {
 		switch string(escape) {
@@ -265,29 +287,29 @@ func unescape(idx int, rawStr []byte) ([]byte, error) {
 		case bytes.HasPrefix(escape, []byte(`\x`)):
 			var n uint64
 			if n, err = strconv.ParseUint(string(escape[2:]), 16, 8); err != nil {
-				err = fmt.Errorf("%d: syntax error: invalid hex escape %q: %s", idx, escape, err)
+				err = p.error("invalid hex escape %q: %s", escape, err)
 				return nil
 			}
 			return []byte{byte(n)}
 		case bytes.HasPrefix(escape, []byte(`\u`)), bytes.HasPrefix(escape, []byte(`\U`)):
 			var n int64
 			if n, err = strconv.ParseInt(string(escape[2:]), 16, 32); err != nil {
-				err = fmt.Errorf("%d: syntax error: invalid unicode escape %q: %s", idx, escape, err)
+				err = p.error("invalid unicode escape %q: %s", escape, err)
 				return nil
 			}
 			return utf8.AppendRune(nil, rune(n))
 		default:
 			if len(escape) != 4 {
-				err = fmt.Errorf("%d: syntax error: invalid string escape %q", idx, escape)
+				err = p.error("invalid string escape %q", escape)
 				return nil
 			}
 			var n int64
 			if n, err = strconv.ParseInt(string(escape[1:]), 8, 32); err != nil {
-				err = fmt.Errorf("%d: syntax error: invalid string escape %q", idx, escape)
+				err = p.error("invalid string escape %q", escape)
 				return nil
 			}
 			if n > 255 {
-				err = fmt.Errorf("%d: invalid octal escape %q %d > 255", idx, escape, n)
+				err = p.error("invalid octal escape %q %d > 255", escape, n)
 				return nil
 			}
 			return []byte{byte(n)}
@@ -297,7 +319,7 @@ func unescape(idx int, rawStr []byte) ([]byte, error) {
 		return nil, err
 	}
 	if !utf8.Valid(escaped) {
-		return nil, fmt.Errorf("%d: syntax error: string %q is not UTF-8 encoded", idx, escaped)
+		return nil, p.error("syntax error: string %q is not UTF-8 encoded", escaped)
 	}
 	return escaped, nil
 }
@@ -317,9 +339,9 @@ func (p *parser) parseString(double bool) (string, error) {
 		p.skipSpace()
 		rawStr := re.FindSubmatch(p.data[p.i:])
 		if rawStr == nil {
-			return "", fmt.Errorf("%d: syntax error: invalid string", p.i)
+			return "", p.error("invalid string")
 		}
-		ss, err := unescape(p.i, rawStr[1])
+		ss, err := p.unescape(rawStr[1])
 		if err != nil {
 			return "", err
 		}
@@ -343,7 +365,7 @@ func (p *parser) parseField() ([]byte, error) {
 	p.skipSpace()
 	fieldName := fieldRE.Find(p.data[p.i:])
 	if fieldName == nil {
-		return nil, fmt.Errorf("%d: syntax error: expecting field name", p.i)
+		return nil, p.error("expecting field name")
 	}
 	p.i += len(fieldName)
 	return fieldName, nil
@@ -383,7 +405,7 @@ func (p *parser) parseVal() (any, error) {
 		var ok bool
 		val, ok = p.parseNum()
 		if !ok {
-			return nil, fmt.Errorf("%d: syntax error: expecting field value", p.i)
+			return nil, p.error("expecting field value")
 		}
 	}
 	return val, err
@@ -397,7 +419,7 @@ func (p *parser) parseList() ([]any, error) {
 		}
 		if i > 0 {
 			if !p.parseLit(",") {
-				return nil, fmt.Errorf("%d: syntax error: expecting comma", p.i)
+				return nil, p.error("expecting comma")
 			}
 			if p.parseLit("]") { // allow trailing comma
 				return l, nil
@@ -438,7 +460,7 @@ func (p *parser) parseFieldVal(out map[string]any) error {
 			return nil
 		}
 	default:
-		return fmt.Errorf("%d: syntax error: expecting colon", p.i)
+		return p.error("expecting colon")
 	}
 	out[string(field)] = appendAny(out[string(field)], val)
 	return nil
