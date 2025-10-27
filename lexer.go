@@ -63,7 +63,7 @@ func (l *lexer) tokens() {
 		case '\'':
 			str := stringRE.Find(l.data[l.i+1:])
 			if str == nil {
-				l.error("invaild string")
+				l.error("invalid string")
 				return
 			}
 			if !l.yield(1 + len(str)) {
