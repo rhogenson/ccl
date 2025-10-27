@@ -275,6 +275,9 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "InvalidUTF8",
 		msg:  `field: "\x80"`,
+	}, {
+		desc: "FieldMissingVal",
+		msg:  `field`,
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()

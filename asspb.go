@@ -150,12 +150,36 @@ package asspb
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"iter"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
+
+type syntaxError struct {
+	line, col int
+	reason    string
+}
+
+func newSyntaxError(data []byte, idx int, reason string, args ...any) error {
+	line, col := 1, 1
+	for _, b := range data[:idx] {
+		if b == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return &syntaxError{line, col, fmt.Sprintf(reason, args...)}
+}
+
+func (e *syntaxError) Error() string {
+	return fmt.Sprintf("%d:%d syntax error: %s", e.line, e.col, e.reason)
+}
 
 func appendAnyRepeated(prev any, new ...any) []any {
 	if prev == nil {
@@ -175,76 +199,70 @@ func appendAny(prev any, new any) any {
 }
 
 type parser struct {
-	data []byte
-	i    int
-}
-
-type syntaxError struct {
-	line, col int
-	reason    string
-}
-
-func (e *syntaxError) Error() string {
-	return fmt.Sprintf("%d:%d syntax error: %s", e.line, e.col, e.reason)
+	nextTok func() (token, error, bool)
+	tok     []byte
+	err     error
+	data    []byte
+	i       int
 }
 
 func (p *parser) error(reason string, args ...any) error {
-	line, col := 1, 1
-	for _, b := range p.data[:p.i] {
-		if b == '\n' {
-			line++
-			col = 1
-		} else {
-			col++
-		}
+	return newSyntaxError(p.data, p.i, reason, args...)
+}
+
+var errEOF = errors.New("premature EOF")
+
+func (p *parser) peek() ([]byte, error) {
+	if p.err != nil || p.tok != nil {
+		return p.tok, p.err
 	}
-	return &syntaxError{line, col, fmt.Sprintf(reason, args...)}
-}
-
-var spaceRE = regexp.MustCompile(`^([[:space:]\p{Zs}]|(#|//)[^\n]*|/\*([^*]|\*[^/])*\*?\*/)*`)
-
-func (p *parser) skipSpace() {
-	p.i += len(spaceRE.Find(p.data[p.i:]))
-}
-
-func (p *parser) parseLit(s string) bool {
-	p.skipSpace()
-	if len(p.data[p.i:]) >= len(s) && string(p.data[p.i:p.i+len(s)]) == s {
-		p.i += len(s)
-		return true
+	tok, err, ok := p.nextTok()
+	if !ok {
+		p.err = errEOF
+		return nil, p.err
 	}
-	return false
+	if err != nil {
+		p.err = err
+		return nil, p.err
+	}
+	p.tok = tok.b
+	p.i = tok.i
+	return p.tok, nil
 }
 
-var numRE = regexp.MustCompile(`^[-+]?(0[xX][0-9a-fA-F]+|((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?)`)
+func (p *parser) next() ([]byte, error) {
+	tok, err := p.peek()
+	if err != nil {
+		return nil, err
+	}
+	p.tok = nil
+	return tok, nil
+}
 
-func (p *parser) parseNum() (any, bool) {
-	p.skipSpace()
-	numBytes := numRE.Find(p.data[p.i:])
-	if numBytes == nil {
+var numRE = regexp.MustCompile(`^[-+]?(0[xX][0-9a-fA-F]+|((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?)$`)
+
+func parseNum(numBytes []byte) (any, bool) {
+	if !numRE.Match(numBytes) {
 		return nil, false
-	}
-	if bytes.ContainsAny(numBytes, ".eE") {
-		n, err := strconv.ParseFloat(string(numBytes), 64)
-		if err != nil {
-			return nil, false
-		}
-		p.i += len(numBytes)
-		return n, true
 	}
 	if bytes.HasPrefix(numBytes, []byte("0x")) || bytes.HasPrefix(numBytes, []byte("0X")) {
 		n, err := strconv.ParseInt(string(numBytes[2:]), 16, 64)
 		if err != nil {
 			return nil, false
 		}
-		p.i += len(numBytes)
+		return n, true
+	}
+	if bytes.ContainsAny(numBytes, ".eE") {
+		n, err := strconv.ParseFloat(string(numBytes), 64)
+		if err != nil {
+			return nil, false
+		}
 		return n, true
 	}
 	n, err := strconv.ParseInt(string(numBytes), 10, 64)
 	if err != nil {
 		return nil, false
 	}
-	p.i += len(numBytes)
 	return n, true
 }
 
@@ -324,88 +342,60 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 	return escaped, nil
 }
 
-var (
-	stringRE       = regexp.MustCompile(`(?s)^(([^'\\]|\\.)*)'`)
-	doubleStringRE = regexp.MustCompile(`(?s)^(([^"\\]|\\.)*)"`)
-)
-
-func (p *parser) parseString(double bool) (string, error) {
-	re := stringRE
-	if double {
-		re = doubleStringRE
-	}
+func (p *parser) parseString(tok []byte) (string, error) {
 	s := new(strings.Builder)
 	for {
-		p.skipSpace()
-		rawStr := re.FindSubmatch(p.data[p.i:])
-		if rawStr == nil {
-			return "", p.error("invalid string")
-		}
-		ss, err := p.unescape(rawStr[1])
+		ss, err := p.unescape(tok[1 : len(tok)-1])
 		if err != nil {
 			return "", err
 		}
 		s.Write(ss)
-		p.i += len(rawStr[0])
-		switch {
-		case p.parseLit("'"):
-			re = stringRE
-			continue
-		case p.parseLit(`"`):
-			re = doubleStringRE
-			continue
+		nextTok, err := p.peek()
+		if err != nil || nextTok[0] != '\'' && nextTok[0] != '"' {
+			return s.String(), nil
 		}
-		return s.String(), nil
+		p.next()
+		tok = nextTok
 	}
-}
-
-var fieldRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z_0-9]*`)
-
-func (p *parser) parseField() ([]byte, error) {
-	p.skipSpace()
-	fieldName := fieldRE.Find(p.data[p.i:])
-	if fieldName == nil {
-		return nil, p.error("expecting field name")
-	}
-	p.i += len(fieldName)
-	return fieldName, nil
 }
 
 func (p *parser) parseMessage() (map[string]any, error) {
 	m := make(map[string]any)
 	for {
-		if p.parseLit("}") {
-			return m, nil
+		tok, err := p.next()
+		if err != nil || tok[0] == '}' {
+			return m, err
 		}
-		if err := p.parseFieldVal(m); err != nil {
+		if err := p.parseFieldVal(m, tok); err != nil {
 			return nil, err
 		}
 	}
 }
 
-func (p *parser) parseVal() (any, error) {
+func (p *parser) parseVal(tok []byte) (any, error) {
 	var (
 		val any
 		err error
 	)
-	switch {
-	case p.parseLit("{"):
+	switch tok[0] {
+	case '{':
 		val, err = p.parseMessage()
-	case p.parseLit("["):
+	case '[':
 		val, err = p.parseList()
-	case p.parseLit("'"):
-		val, err = p.parseString(false)
-	case p.parseLit(`"`):
-		val, err = p.parseString(true)
-	case p.parseLit("true"), p.parseLit("yes"), p.parseLit("on"):
-		val = true
-	case p.parseLit("false"), p.parseLit("no"), p.parseLit("off"):
-		val = false
+	case '\'', '"':
+		val, err = p.parseString(tok)
 	default:
-		var ok bool
-		val, ok = p.parseNum()
-		if !ok {
-			return nil, p.error("expecting field value")
+		switch string(tok) {
+		case "true", "yes", "on":
+			val = true
+		case "false", "no", "off":
+			val = false
+		default:
+			var ok bool
+			val, ok = parseNum(tok)
+			if !ok {
+				return nil, p.error("expecting field value")
+			}
 		}
 	}
 	return val, err
@@ -414,18 +404,20 @@ func (p *parser) parseVal() (any, error) {
 func (p *parser) parseList() ([]any, error) {
 	l := []any{}
 	for i := 0; ; i++ {
-		if p.parseLit("]") {
-			return l, nil
+		tok, err := p.next()
+		if err != nil || tok[0] == ']' {
+			return l, err
 		}
 		if i > 0 {
-			if !p.parseLit(",") {
+			if tok[0] != ',' {
 				return nil, p.error("expecting comma")
 			}
-			if p.parseLit("]") { // allow trailing comma
-				return l, nil
+			tok, err = p.next()
+			if err != nil || tok[0] == ']' { // allow trailing comma
+				return l, err
 			}
 		}
-		val, err := p.parseVal()
+		val, err := p.parseVal(tok)
 		if err != nil {
 			return nil, err
 		}
@@ -433,26 +425,33 @@ func (p *parser) parseList() ([]any, error) {
 	}
 }
 
-func (p *parser) parseFieldVal(out map[string]any) error {
-	field, err := p.parseField()
+func (p *parser) parseFieldVal(out map[string]any, field []byte) error {
+	if b := field[0]; !(b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z') {
+		return p.error("expecting field")
+	}
+	tok, err := p.next()
 	if err != nil {
 		return err
 	}
 	var val any
-	switch {
-	case p.parseLit("{"):
+	switch tok[0] {
+	case '{':
 		if val, err = p.parseMessage(); err != nil {
 			return err
 		}
-	case p.parseLit("["):
+	case '[':
 		val, err := p.parseList()
 		if err != nil {
 			return err
 		}
 		out[string(field)] = appendAnyRepeated(out[string(field)], val...)
 		return nil
-	case p.parseLit(":"):
-		if val, err = p.parseVal(); err != nil {
+	case ':':
+		tok, err := p.next()
+		if err != nil {
+			return err
+		}
+		if val, err = p.parseVal(tok); err != nil {
 			return err
 		}
 		if l, ok := val.([]any); ok {
@@ -469,11 +468,14 @@ func (p *parser) parseFieldVal(out map[string]any) error {
 func (p *parser) parse() (map[string]any, error) {
 	m := make(map[string]any)
 	for {
-		p.skipSpace()
-		if p.i == len(p.data) {
-			return m, nil
+		tok, err := p.next()
+		if err != nil {
+			if err == errEOF {
+				return m, nil
+			}
+			return nil, err
 		}
-		if err := p.parseFieldVal(m); err != nil {
+		if err := p.parseFieldVal(m, tok); err != nil {
 			return nil, err
 		}
 	}
@@ -490,8 +492,9 @@ func (p *parser) parse() (map[string]any, error) {
 //	key1: "val1"
 //	key2: "val2"
 func Unmarshal(data []byte, v any) error {
-	p := &parser{data: data}
-	m, err := p.parse()
+	nextToken, stop := iter.Pull2(tokens(data))
+	defer stop()
+	m, err := (&parser{nextTok: nextToken, data: data}).parse()
 	if err != nil {
 		return err
 	}
