@@ -31,6 +31,14 @@
 // Leading zeros are not permitted in decimal numbers, due to potential
 // confusion with octal (which is not supported).
 //
+// As a lexical matter, numbers must be separated from subsequent field names by
+// intervening whitespace or comments:
+//
+//	# invalid
+//	field1:10field2:20
+//	# ok
+//	field1:10 field2:20
+//
 // # Strings
 //
 // Strings are written with " or ' and any sequence of intermediate bytes (with
