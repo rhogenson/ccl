@@ -13,15 +13,15 @@ func TestUnmarshal(t *testing.T) {
 		Field int64 `ccl:"field"`
 	}
 	type message struct {
-		String          string          `ccl:"string"`
-		String2         string          `ccl:"string2"`
-		Int             int64           `ccl:"int"`
-		Float           float64         `ccl:"float"`
-		Bool            bool            `ccl:"bool"`
-		Bool2           bool            `ccl:"bool2"`
-		Message         *nestedMessage  `ccl:"message"`
-		Repeated        []int64         `ccl:"repeated"`
-		RepeatedMessage []nestedMessage `ccl:"repeated_message"`
+		String          string           `ccl:"string"`
+		String2         string           `ccl:"string2"`
+		Int             int64            `ccl:"int"`
+		Float           float64          `ccl:"float"`
+		Bool            bool             `ccl:"bool"`
+		Bool2           bool             `ccl:"bool2"`
+		Message         *nestedMessage   `ccl:"message"`
+		Repeated        []int64          `ccl:"repeated"`
+		RepeatedMessage []*nestedMessage `ccl:"repeated_message"`
 
 		Ignore     map[int]int `ccl:"-,"` // unlike JSON this also means ignore
 		unexported int64
@@ -212,7 +212,7 @@ can just span multiple lines"`,
 	}, {
 		desc: "ListOfMessage",
 		msg:  `repeated_message: [{}]`,
-		want: message{RepeatedMessage: []nestedMessage{{}}},
+		want: message{RepeatedMessage: []*nestedMessage{{}}},
 	}, {
 		desc: "CStyleComment",
 		msg:  `message: /** inline comment **/ {}`,

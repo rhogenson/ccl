@@ -189,19 +189,19 @@ func (e *syntaxError) Error() string {
 	return fmt.Sprintf("%d:%d syntax error: %s", e.line, e.col, e.reason)
 }
 
-func (p *parser) fieldMap(s reflect.Value) (map[string]reflect.Value, error) {
-	if !(s.Kind() == reflect.Struct || s.Kind() == reflect.Pointer && s.Type().Elem().Kind() == reflect.Struct) {
-		return nil, p.error("field must be a struct or pointer to struct (got %T)", s.Interface())
+type structField struct {
+	ty   reflect.Type
+	name string
+}
+
+func fieldMap(out map[structField]int, types map[reflect.Type]bool, s reflect.Type) {
+	if types[s] {
+		// Already processed
+		return
 	}
-	if s.Kind() == reflect.Pointer {
-		if s.IsNil() {
-			s.Set(reflect.New(s.Type().Elem()))
-		}
-		s = s.Elem()
-	}
-	m := make(map[string]reflect.Value)
+	types[s] = true
 	for i := range s.NumField() {
-		field := s.Type().Field(i)
+		field := s.Field(i)
 		if !field.IsExported() {
 			continue
 		}
@@ -212,17 +212,24 @@ func (p *parser) fieldMap(s reflect.Value) (map[string]reflect.Value, error) {
 				continue
 			}
 		}
-		m[fieldName] = s.Field(i)
+		out[structField{s, fieldName}] = i
+		if field.Type.Kind() == reflect.Struct {
+			fieldMap(out, types, field.Type)
+		} else if (field.Type.Kind() == reflect.Pointer || field.Type.Kind() == reflect.Slice) && field.Type.Elem().Kind() == reflect.Struct {
+			fieldMap(out, types, field.Type.Elem())
+		} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Pointer && field.Type.Elem().Elem().Kind() == reflect.Struct {
+			fieldMap(out, types, field.Type.Elem().Elem())
+		}
 	}
-	return m, nil
 }
 
 type parser struct {
-	nextTok func() (token, error, bool)
-	tok     []byte
-	err     error
-	data    []byte
-	i       int
+	nextTok  func() (token, error, bool)
+	tok      []byte
+	err      error
+	data     []byte
+	i        int
+	fieldMap map[structField]int
 }
 
 func (p *parser) error(reason string, args ...any) error {
@@ -395,16 +402,21 @@ func (p *parser) parseString(out reflect.Value, tok []byte) error {
 }
 
 func (p *parser) parseMessage(out reflect.Value) error {
-	fieldMap, err := p.fieldMap(out)
-	if err != nil {
-		return err
+	if !(out.Kind() == reflect.Struct || out.Kind() == reflect.Pointer && out.Type().Elem().Kind() == reflect.Struct) {
+		return p.error("type must be a struct or pointer to struct (got %s)", out.Type())
+	}
+	if out.Kind() == reflect.Pointer {
+		if out.IsNil() {
+			out.Set(reflect.New(out.Type().Elem()))
+		}
+		out = out.Elem()
 	}
 	for {
 		tok, err := p.next()
 		if err != nil || tok[0] == '}' {
 			return err
 		}
-		if err := p.parseFieldVal(fieldMap, tok); err != nil {
+		if err := p.parseFieldVal(out, tok); err != nil {
 			return err
 		}
 	}
@@ -483,11 +495,11 @@ func (p *parser) appendVal(out reflect.Value, tok []byte) error {
 	return nil
 }
 
-func (p *parser) parseFieldVal(fieldMap map[string]reflect.Value, field []byte) error {
+func (p *parser) parseFieldVal(out reflect.Value, field []byte) error {
 	if b := field[0]; !(b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z') {
 		return p.error("expecting field")
 	}
-	structField, ok := fieldMap[string(field)]
+	fieldIdx, ok := p.fieldMap[structField{out.Type(), string(field)}]
 	if !ok {
 		return p.error("no field named %q", field)
 	}
@@ -497,7 +509,7 @@ func (p *parser) parseFieldVal(fieldMap map[string]reflect.Value, field []byte) 
 	}
 	switch tok[0] {
 	case '{', '[':
-		if err := p.appendVal(structField, tok); err != nil {
+		if err := p.appendVal(out.Field(fieldIdx), tok); err != nil {
 			return err
 		}
 	case ':':
@@ -505,7 +517,7 @@ func (p *parser) parseFieldVal(fieldMap map[string]reflect.Value, field []byte) 
 		if err != nil {
 			return err
 		}
-		if err := p.appendVal(structField, tok); err != nil {
+		if err := p.appendVal(out.Field(fieldIdx), tok); err != nil {
 			return err
 		}
 	default:
@@ -516,13 +528,11 @@ func (p *parser) parseFieldVal(fieldMap map[string]reflect.Value, field []byte) 
 
 func (p *parser) parse(v any) error {
 	sp := reflect.ValueOf(v)
-	if sp.Kind() != reflect.Pointer || sp.IsNil() {
-		return p.error("value must be a non-nil pointer")
+	if sp.Kind() != reflect.Pointer || sp.IsNil() || sp.Elem().Kind() != reflect.Struct {
+		return p.error("value must be a non-nil pointer to a struct")
 	}
-	fieldMap, err := p.fieldMap(sp.Elem())
-	if err != nil {
-		return err
-	}
+	p.fieldMap = make(map[structField]int)
+	fieldMap(p.fieldMap, make(map[reflect.Type]bool), sp.Type().Elem())
 	for {
 		tok, err := p.next()
 		if err != nil {
@@ -531,7 +541,7 @@ func (p *parser) parse(v any) error {
 			}
 			return err
 		}
-		if err := p.parseFieldVal(fieldMap, tok); err != nil {
+		if err := p.parseFieldVal(sp.Elem(), tok); err != nil {
 			return err
 		}
 	}
