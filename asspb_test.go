@@ -9,221 +9,240 @@ import (
 func TestUnmarshal(t *testing.T) {
 	t.Parallel()
 
+	type nestedMessage struct {
+		Field int64 `ccl:"field"`
+	}
+	type message struct {
+		String          string          `ccl:"string"`
+		String2         string          `ccl:"string2"`
+		Int             int64           `ccl:"int"`
+		Float           float64         `ccl:"float"`
+		Bool            bool            `ccl:"bool"`
+		Bool2           bool            `ccl:"bool2"`
+		Message         *nestedMessage  `ccl:"message"`
+		Repeated        []int64         `ccl:"repeated"`
+		RepeatedMessage []nestedMessage `ccl:"repeated_message"`
+
+		Ignore     map[int]int `ccl:"-,"` // unlike JSON this also means ignore
+		unexported int64
+	}
+
 	for _, tc := range []struct {
 		desc string
 		msg  string
-		want map[string]any
+		want message
 	}{{
 		desc: "Complete",
 		msg: `# This is a comment
-field_string: 'asdf\n' # comment end of line
-field_doublestring: "asdf\n"
-field_int: 10
-field_float: 10.5e13
-field_true: true
-field_false: false
-field_nested { asdf: 10 }
-field_repeated [1, 2, 3]
-field_repeated: 4
-field_repeated [5, 6]
+string: 'asdf\n' # comment end of line
+string2: "asdf\n"
+int: 10
+float: 10.5e13
+bool: true
+bool2: false
+message { field: 10 }
+repeated [1, 2, 3]
+repeated: 4
+repeated [5, 6]
 `,
-		want: map[string]any{
-			"field_string":       "asdf\n",
-			"field_doublestring": "asdf\n",
-			"field_int":          10.,
-			"field_float":        10.5e13,
-			"field_true":         true,
-			"field_false":        false,
-			"field_nested":       map[string]any{"asdf": 10.},
-			"field_repeated":     []any{1., 2., 3., 4., 5., 6.},
+		want: message{
+			String:   "asdf\n",
+			String2:  "asdf\n",
+			Int:      10,
+			Float:    10.5e13,
+			Bool:     true,
+			Bool2:    false,
+			Message:  &nestedMessage{Field: 10},
+			Repeated: []int64{1, 2, 3, 4, 5, 6},
 		},
 	}, {
 		desc: "MultilineString",
-		msg: `field: "strings
+		msg: `string: "strings
 can just span multiple lines"`,
-		want: map[string]any{"field": "strings\ncan just span multiple lines"},
+		want: message{String: "strings\ncan just span multiple lines"},
 	}, {
 		desc: "Zero",
-		msg:  `field: 0`,
-		want: map[string]any{"field": 0.},
+		msg:  `int: 0`,
+		want: message{Int: 0},
 	}, {
 		desc: "Hex",
-		msg:  `field: 0xff`,
-		want: map[string]any{"field": 255.},
+		msg:  `int: 0xff`,
+		want: message{Int: 255},
 	}, {
 		desc: "CapitalHex",
-		msg:  `field: 0XfF`,
-		want: map[string]any{"field": 255.},
+		msg:  `int: 0XfF`,
+		want: message{Int: 255},
 	}, {
 		desc: "HexLeadingZero",
-		msg:  `field: 0x0f`,
-		want: map[string]any{"field": 15.},
+		msg:  `int: 0x0f`,
+		want: message{Int: 15},
 	}, {
 		desc: "Float",
-		msg:  `field: 1.5e10`,
-		want: map[string]any{"field": 1.5e10},
+		msg:  `float: 1.5e10`,
+		want: message{Float: 1.5e10},
 	}, {
 		desc: "FloatCapitalE",
-		msg:  `field: 1.5E10`,
-		want: map[string]any{"field": 1.5e10},
+		msg:  `float: 1.5E10`,
+		want: message{Float: 1.5e10},
 	}, {
 		desc: "NegativeFloat",
-		msg:  `field: -1.5e-10`,
-		want: map[string]any{"field": -1.5e-10},
+		msg:  `float: -1.5e-10`,
+		want: message{Float: -1.5e-10},
 	}, {
 		desc: "PositiveFloat",
-		msg:  `field: +1.5e+10`,
-		want: map[string]any{"field": 1.5e10},
+		msg:  `float: +1.5e+10`,
+		want: message{Float: 1.5e10},
 	}, {
 		desc: "Int",
-		msg:  `field: 10`,
-		want: map[string]any{"field": 10.},
+		msg:  `int: 10`,
+		want: message{Int: 10},
 	}, {
 		desc: "NegativeInt",
-		msg:  `field: -10`,
-		want: map[string]any{"field": -10.},
+		msg:  `int: -10`,
+		want: message{Int: -10},
 	}, {
 		desc: "PositiveInt",
-		msg:  `field: +10`,
-		want: map[string]any{"field": 10.},
+		msg:  `int: +10`,
+		want: message{Int: 10},
 	}, {
 		desc: "String",
-		msg:  `field: 'asdf'`,
-		want: map[string]any{"field": "asdf"},
+		msg:  `string: 'asdf'`,
+		want: message{String: "asdf"},
 	}, {
 		desc: "DoubleString",
-		msg:  `field: "asdf"`,
-		want: map[string]any{"field": "asdf"},
+		msg:  `string: "asdf"`,
+		want: message{String: "asdf"},
 	}, {
 		desc: "StringEscapeSingle",
-		msg:  `you: 'ain\'t'`,
-		want: map[string]any{"you": "ain't"},
+		msg:  `string: 'ain\'t'`,
+		want: message{String: "ain't"},
 	}, {
 		desc: "DoubleStringEscapeSingle",
-		msg:  `I: "won\'t"`,
-		want: map[string]any{"I": "won't"},
+		msg:  `string: "won\'t"`,
+		want: message{String: "won't"},
 	}, {
 		desc: "StringEscapeDouble",
-		msg:  `field: '\"'`,
-		want: map[string]any{"field": `"`},
+		msg:  `string: '\"'`,
+		want: message{String: `"`},
 	}, {
 		desc: "DoubleStringEscapeDouble",
-		msg:  `field: "\""`,
-		want: map[string]any{"field": `"`},
+		msg:  `string: "\""`,
+		want: message{String: `"`},
 	}, {
 		desc: "StringEscapeQuestionMark",
-		msg:  `field: "\?"`,
-		want: map[string]any{"field": "?"},
+		msg:  `string: "\?"`,
+		want: message{String: "?"},
 	}, {
 		desc: "StringEscapeBackslash",
-		msg:  `field: '\\'`,
-		want: map[string]any{"field": `\`},
+		msg:  `string: '\\'`,
+		want: message{String: `\`},
 	}, {
 		desc: "StringEscapeA",
-		msg:  `field: '\a'`,
-		want: map[string]any{"field": "\a"},
+		msg:  `string: '\a'`,
+		want: message{String: "\a"},
 	}, {
 		desc: "StringEscapeB",
-		msg:  `field: '\b'`,
-		want: map[string]any{"field": "\b"},
+		msg:  `string: '\b'`,
+		want: message{String: "\b"},
 	}, {
 		desc: "StringEscapeF",
-		msg:  `field: '\f'`,
-		want: map[string]any{"field": "\f"},
+		msg:  `string: '\f'`,
+		want: message{String: "\f"},
 	}, {
 		desc: "StringEscapeN",
-		msg:  `field: '\n'`,
-		want: map[string]any{"field": "\n"},
+		msg:  `string: '\n'`,
+		want: message{String: "\n"},
 	}, {
 		desc: "StringEscapeR",
-		msg:  `field: '\r'`,
-		want: map[string]any{"field": "\r"},
+		msg:  `string: '\r'`,
+		want: message{String: "\r"},
 	}, {
 		desc: "StringEscapeT",
-		msg:  `field: '\t'`,
-		want: map[string]any{"field": "\t"},
+		msg:  `string: '\t'`,
+		want: message{String: "\t"},
 	}, {
 		desc: "StringEscapeV",
-		msg:  `field: '\v'`,
-		want: map[string]any{"field": "\v"},
+		msg:  `string: '\v'`,
+		want: message{String: "\v"},
 	}, {
 		desc: "StringHex",
-		msg:  `field: '\x0a'`,
-		want: map[string]any{"field": "\n"},
+		msg:  `string: '\x0a'`,
+		want: message{String: "\n"},
 	}, {
 		desc: "StringHexHighByte",
-		msg:  `field: "\xe4\xb8\x96"`,
-		want: map[string]any{"field": "世"},
+		msg:  `string: "\xe4\xb8\x96"`,
+		want: message{String: "世"},
 	}, {
 		desc: "StringUnicode",
-		msg:  `field: '\u2014'`,
-		want: map[string]any{"field": "—"},
+		msg:  `string: '\u2014'`,
+		want: message{String: "—"},
 	}, {
 		desc: "StringOctal",
-		msg:  `field: '\033'`,
-		want: map[string]any{"field": "\033"},
+		msg:  `string: '\033'`,
+		want: message{String: "\033"},
 	}, {
 		desc: "Message",
-		msg:  `field { nested_field: 10 }`,
-		want: map[string]any{"field": map[string]any{"nested_field": 10.}},
+		msg:  `message { field: 10 }`,
+		want: message{Message: &nestedMessage{Field: 10}},
 	}, {
 		desc: "EmptyMessage",
-		msg:  `field {}`,
-		want: map[string]any{"field": map[string]any{}},
+		msg:  `message {}`,
+		want: message{Message: &nestedMessage{}},
 	}, {
 		desc: "Repeated",
-		msg: `field: 1
-field: 2`,
-		want: map[string]any{"field": []any{1., 2.}},
+		msg: `
+					repeated: 1
+					repeated: 2`,
+		want: message{Repeated: []int64{1, 2}},
 	}, {
 		desc: "RepeatedList",
-		msg:  `field: [1, 2]`,
-		want: map[string]any{"field": []any{1., 2.}},
+		msg:  `repeated: [1, 2]`,
+		want: message{Repeated: []int64{1, 2}},
 	}, {
 		desc: "EmptyList",
-		msg:  `field: []`,
-		want: map[string]any{"field": []any{}},
+		msg:  `repeated: []`,
+		want: message{Repeated: []int64{}},
 	}, {
 		desc: "RepeatedListTrailingComma",
-		msg: `field: [
-			1,
-			2,
-		]`,
-		want: map[string]any{"field": []any{1., 2.}},
+		msg: `repeated: [
+					1,
+					2,
+				]`,
+		want: message{Repeated: []int64{1, 2}},
 	}, {
 		desc: "ListOfMessage",
-		msg:  `field: [{}]`,
-		want: map[string]any{"field": []any{map[string]any{}}},
+		msg:  `repeated_message: [{}]`,
+		want: message{RepeatedMessage: []nestedMessage{{}}},
 	}, {
 		desc: "CStyleComment",
-		msg:  `field: /** inline comment **/ {}`,
-		want: map[string]any{"field": map[string]any{}},
+		msg:  `message: /** inline comment **/ {}`,
+		want: message{Message: &nestedMessage{}},
 	}, {
 		desc: "CStyleLineComment",
-		msg:  `field: {} // line comment`,
-		want: map[string]any{"field": map[string]any{}},
+		msg:  `message: {} // line comment`,
+		want: message{Message: &nestedMessage{}},
 	}, {
 		desc: "ConcatStrings",
-		msg:  `field: 'that'"'"'s cool'`,
-		want: map[string]any{"field": "that's cool"},
+		msg:  `string: 'that'"'"'s cool'`,
+		want: message{String: "that's cool"},
 	}, {
 		desc: "RemoveNewline",
-		msg: `field: 'remove newline \
+		msg: `string: 'remove newline \
 from string'`,
-		want: map[string]any{"field": "remove newline from string"},
+		want: message{String: "remove newline from string"},
 	}, {
 		desc: "RemoveNewlineWindows",
-		msg:  "field: 'remove newline \\\r\nfrom string'",
-		want: map[string]any{"field": "remove newline from string"},
+		msg:  "string: 'remove newline \\\r\nfrom string'",
+		want: message{String: "remove newline from string"},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
 
-			got := make(map[string]any)
+			var got message
 			if err := Unmarshal([]byte(tc.msg), &got); err != nil {
 				t.Fatalf("Unmarshal(%q) failed: %s\n", tc.msg, err)
 			}
-			if diff := cmp.Diff(tc.want, got); diff != "" {
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(message{})); diff != "" {
 				t.Errorf("Unmarshal(%q) returned unexpected diff (-want +got):\n%s", tc.msg, diff)
 			}
 		})
@@ -233,56 +252,70 @@ from string'`,
 func TestUnmarshal_Invalid(t *testing.T) {
 	t.Parallel()
 
+	type nestedMessage struct {
+		Int int `ccl:"int"`
+	}
+	type message struct {
+		Int         int64           `ccl:"int"`
+		String      string          `ccl:"string"`
+		Msg         nestedMessage   `ccl:"msg"`
+		Repeated    []int64         `ccl:"repeated"`
+		RepeatedMsg []nestedMessage `ccl:"repeated_msg"`
+	}
+
 	for _, tc := range []struct {
 		desc string
 		msg  string
 	}{{
 		desc: "BadNum",
-		msg:  `field: .`,
+		msg:  `int: .`,
 	}, {
 		desc: "BadStringEscape",
-		msg:  `field: '\g'`,
+		msg:  `string: '\g'`,
 	}, {
 		desc: "BadDoubleStringEscape",
-		msg:  `field: "\g"`,
+		msg:  `string: "\g"`,
 	}, {
 		desc: "UnterminatedString",
-		msg:  `field: '`,
+		msg:  `string: '`,
 	}, {
 		desc: "UnterminatedDoubleString",
-		msg:  `field: "`,
+		msg:  `string: "`,
 	}, {
 		desc: "NoFieldName",
 		msg:  `10`,
 	}, {
 		desc: "MsgNoFieldName",
-		msg:  `field {10}`,
+		msg:  `msg {10}`,
 	}, {
 		desc: "ListMissingComma",
-		msg:  `field [1 2]`,
+		msg:  `repeated [1 2]`,
 	}, {
 		desc: "ListBadVal",
-		msg:  `field [asdf]`,
+		msg:  `repeated [asdf]`,
 	}, {
 		desc: "ListBadMsgVal",
-		msg:  `field [{asdf}]`,
+		msg:  `repeated_msg [{asdf}]`,
 	}, {
 		desc: "IntLeadingZero",
-		msg:  `field: 0644`,
+		msg:  `int: 0644`,
 	}, {
 		desc: "InvalidOctal",
-		msg:  `field: "\777"`,
+		msg:  `string: "\777"`,
 	}, {
 		desc: "InvalidUTF8",
-		msg:  `field: "\x80"`,
+		msg:  `string: "\x80"`,
 	}, {
 		desc: "FieldMissingVal",
-		msg:  `field`,
+		msg:  `string`,
+	}, {
+		desc: "FieldMissingColon",
+		msg:  `string "abc"`,
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
 
-			got := make(map[string]any)
+			var got message
 			err := Unmarshal([]byte(tc.msg), &got)
 			if err == nil {
 				t.Errorf("Unmarshal(%q) returned success, want error", tc.msg)
@@ -291,14 +324,83 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}
 }
 
+func TestUnmarshal_InvalidType(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		desc string
+		msg  string
+		out  any
+	}{{
+		desc: "Nil",
+		msg:  `field {}`,
+		out:  (*struct{})(nil),
+	}, {
+		desc: "Struct",
+		msg:  `field {}`,
+		out:  new(int),
+	}, {
+		desc: "Int",
+		msg:  `Field: 123`,
+		out:  new(struct{ Field string }),
+	}, {
+		desc: "IntHex",
+		msg:  `Field: 0x123`,
+		out:  new(struct{ Field string }),
+	}, {
+		desc: "Float",
+		msg:  `Field: 123.`,
+		out:  new(struct{ Field int64 }),
+	}, {
+		desc: "NestedMessage",
+		msg:  `Field {Field {}}`,
+		out:  new(struct{ Field int64 }),
+	}, {
+		desc: "True",
+		msg:  `F:on`,
+		out:  new(struct{ F int64 }),
+	}, {
+		desc: "False",
+		msg:  `F:no`,
+		out:  new(struct{ F int64 }),
+	}, {
+		desc: "List",
+		msg:  `F:[]`,
+		out:  new(struct{ F int64 }),
+	}, {
+		desc: "RepeatedBool",
+		msg:  `F:on F:no`,
+		out:  new(struct{ F []int64 }),
+	}, {
+		desc: "String",
+		msg:  `F:"abc"`,
+		out:  new(struct{ F int64 }),
+	}} {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			err := Unmarshal([]byte(tc.msg), tc.out)
+			if err == nil {
+				t.Errorf("Unmarshal(%+v) returned success, want error", tc.out)
+			}
+		})
+	}
+}
+
 func TestUnmarshal_ErrorLineCol(t *testing.T) {
+	t.Parallel()
+
+	type message struct {
+		Secret int64 `ccl:"secret"`
+	}
+
 	msg := `
 		###### This is a very important file please do not modify
 		#########################################################
 		################ The more ## I put the more secure it is######
 		secret:12345; # oops typo
 	`
-	err := Unmarshal([]byte(msg), new(map[string]any))
+	err := Unmarshal([]byte(msg), new(message))
 	syntaxErr, ok := err.(*syntaxError)
 	if !ok {
 		t.Errorf("Unmarshal(%q): expected *syntaxError, got error %T %[2]v", msg, err)

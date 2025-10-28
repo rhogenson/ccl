@@ -157,10 +157,10 @@ package asspb
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -189,21 +189,32 @@ func (e *syntaxError) Error() string {
 	return fmt.Sprintf("%d:%d syntax error: %s", e.line, e.col, e.reason)
 }
 
-func appendAnyRepeated(prev any, new ...any) []any {
-	if prev == nil {
-		return new
+func (p *parser) fieldMap(s reflect.Value) (map[string]reflect.Value, error) {
+	if !(s.Kind() == reflect.Struct || s.Kind() == reflect.Pointer && s.Type().Elem().Kind() == reflect.Struct) {
+		return nil, p.error("field must be a struct or pointer to struct (got %T)", s.Interface())
 	}
-	if prevList, ok := prev.([]any); ok {
-		return append(prevList, new...)
+	if s.Kind() == reflect.Pointer {
+		if s.IsNil() {
+			s.Set(reflect.New(s.Type().Elem()))
+		}
+		s = s.Elem()
 	}
-	return append([]any{prev}, new...)
-}
-
-func appendAny(prev any, new any) any {
-	if prev == nil {
-		return new
+	m := make(map[string]reflect.Value)
+	for i := range s.NumField() {
+		field := s.Type().Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		fieldName := field.Name
+		if tag, ok := field.Tag.Lookup("ccl"); ok {
+			fieldName, _, _ = strings.Cut(tag, ",")
+			if fieldName == "-" {
+				continue
+			}
+		}
+		m[fieldName] = s.Field(i)
 	}
-	return appendAnyRepeated(prev, new)
+	return m, nil
 }
 
 type parser struct {
@@ -249,29 +260,41 @@ func (p *parser) next() ([]byte, error) {
 
 var numRE = regexp.MustCompile(`^[-+]?(0[xX][0-9a-fA-F]+|((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?)$`)
 
-func parseNum(numBytes []byte) (any, bool) {
+func (p *parser) parseNum(out reflect.Value, numBytes []byte) error {
 	if !numRE.Match(numBytes) {
-		return nil, false
+		return p.error("invalid number")
 	}
 	if bytes.HasPrefix(numBytes, []byte("0x")) || bytes.HasPrefix(numBytes, []byte("0X")) {
+		if out.Kind() != reflect.Int64 {
+			return p.error("field must be int64")
+		}
 		n, err := strconv.ParseInt(string(numBytes[2:]), 16, 64)
 		if err != nil {
-			return nil, false
+			return p.error("invalid number")
 		}
-		return n, true
+		out.SetInt(n)
+		return nil
 	}
 	if bytes.ContainsAny(numBytes, ".eE") {
+		if out.Kind() != reflect.Float64 {
+			return p.error("field must be float64")
+		}
 		n, err := strconv.ParseFloat(string(numBytes), 64)
 		if err != nil {
-			return nil, false
+			return p.error("invalid number")
 		}
-		return n, true
+		out.SetFloat(n)
+		return nil
+	}
+	if out.Kind() != reflect.Int64 {
+		return p.error("field must be int64")
 	}
 	n, err := strconv.ParseInt(string(numBytes), 10, 64)
 	if err != nil {
-		return nil, false
+		return p.error("invalid number")
 	}
-	return n, true
+	out.SetInt(n)
+	return nil
 }
 
 var escapesRE = regexp.MustCompile(`(?s)\\(.|\r\n|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`)
@@ -350,146 +373,171 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 	return escaped, nil
 }
 
-func (p *parser) parseString(tok []byte) (string, error) {
+func (p *parser) parseString(out reflect.Value, tok []byte) error {
+	if out.Kind() != reflect.String {
+		return p.error("field must be string")
+	}
 	s := new(strings.Builder)
 	for {
 		ss, err := p.unescape(tok[1 : len(tok)-1])
 		if err != nil {
-			return "", err
+			return err
 		}
 		s.Write(ss)
 		nextTok, err := p.peek()
 		if err != nil || nextTok[0] != '\'' && nextTok[0] != '"' {
-			return s.String(), nil
+			out.SetString(s.String())
+			return nil
 		}
 		p.next()
 		tok = nextTok
 	}
 }
 
-func (p *parser) parseMessage() (map[string]any, error) {
-	m := make(map[string]any)
+func (p *parser) parseMessage(out reflect.Value) error {
+	fieldMap, err := p.fieldMap(out)
+	if err != nil {
+		return err
+	}
 	for {
 		tok, err := p.next()
 		if err != nil || tok[0] == '}' {
-			return m, err
+			return err
 		}
-		if err := p.parseFieldVal(m, tok); err != nil {
-			return nil, err
+		if err := p.parseFieldVal(fieldMap, tok); err != nil {
+			return err
 		}
 	}
 }
 
-func (p *parser) parseVal(tok []byte) (any, error) {
-	var (
-		val any
-		err error
-	)
+func (p *parser) parseVal(out reflect.Value, tok []byte) error {
+	var err error
 	switch tok[0] {
 	case '{':
-		val, err = p.parseMessage()
+		err = p.parseMessage(out)
 	case '[':
-		val, err = p.parseList()
+		err = p.parseList(out)
 	case '\'', '"':
-		val, err = p.parseString(tok)
+		err = p.parseString(out, tok)
 	default:
 		switch string(tok) {
 		case "true", "yes", "on":
-			val = true
-		case "false", "no", "off":
-			val = false
-		default:
-			var ok bool
-			val, ok = parseNum(tok)
-			if !ok {
-				return nil, p.error("expecting field value")
+			if out.Kind() != reflect.Bool {
+				return p.error("field must be bool")
 			}
+			out.SetBool(true)
+		case "false", "no", "off":
+			if out.Kind() != reflect.Bool {
+				return p.error("field must be bool")
+			}
+			out.SetBool(false)
+		default:
+			err = p.parseNum(out, tok)
 		}
 	}
-	return val, err
+	return err
 }
 
-func (p *parser) parseList() ([]any, error) {
-	l := []any{}
+func (p *parser) parseList(out reflect.Value) error {
+	if out.Kind() != reflect.Slice {
+		return p.error("field must be slice")
+	}
+	if out.IsNil() {
+		// Not technically necessary since nil slices are usually treated the
+		// same as any empty slice, but usually nil would mean that the user
+		// didn't set the value, at least for types that have a nil.
+		out.Set(reflect.MakeSlice(out.Type(), 0, 0))
+	}
 	for i := 0; ; i++ {
 		tok, err := p.next()
 		if err != nil || tok[0] == ']' {
-			return l, err
+			return err
 		}
 		if i > 0 {
 			if tok[0] != ',' {
-				return nil, p.error("expecting comma")
+				return p.error("expecting comma")
 			}
 			tok, err = p.next()
 			if err != nil || tok[0] == ']' { // allow trailing comma
-				return l, err
+				return err
 			}
 		}
-		val, err := p.parseVal(tok)
-		if err != nil {
-			return nil, err
+		out.Set(reflect.Append(out, reflect.Zero(out.Type().Elem())))
+		if err := p.parseVal(out.Index(out.Len()-1), tok); err != nil {
+			return err
 		}
-		l = append(l, val)
 	}
 }
 
-func (p *parser) parseFieldVal(out map[string]any, field []byte) error {
+func (p *parser) appendVal(out reflect.Value, tok []byte) error {
+	if tok[0] == '[' || out.Kind() != reflect.Slice {
+		if err := p.parseVal(out, tok); err != nil {
+			return err
+		}
+	} else {
+		out.Set(reflect.Append(out, reflect.Zero(out.Type().Elem())))
+		if err := p.parseVal(out.Index(out.Len()-1), tok); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *parser) parseFieldVal(fieldMap map[string]reflect.Value, field []byte) error {
 	if b := field[0]; !(b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z') {
 		return p.error("expecting field")
+	}
+	structField, ok := fieldMap[string(field)]
+	if !ok {
+		return p.error("no field named %q", field)
 	}
 	tok, err := p.next()
 	if err != nil {
 		return err
 	}
-	var val any
 	switch tok[0] {
-	case '{':
-		if val, err = p.parseMessage(); err != nil {
+	case '{', '[':
+		if err := p.appendVal(structField, tok); err != nil {
 			return err
 		}
-	case '[':
-		val, err := p.parseList()
-		if err != nil {
-			return err
-		}
-		out[string(field)] = appendAnyRepeated(out[string(field)], val...)
-		return nil
 	case ':':
 		tok, err := p.next()
 		if err != nil {
 			return err
 		}
-		if val, err = p.parseVal(tok); err != nil {
+		if err := p.appendVal(structField, tok); err != nil {
 			return err
-		}
-		if l, ok := val.([]any); ok {
-			out[string(field)] = appendAnyRepeated(out[string(field)], l...)
-			return nil
 		}
 	default:
 		return p.error("expecting colon")
 	}
-	out[string(field)] = appendAny(out[string(field)], val)
 	return nil
 }
 
-func (p *parser) parse() (map[string]any, error) {
-	m := make(map[string]any)
+func (p *parser) parse(v any) error {
+	sp := reflect.ValueOf(v)
+	if sp.Kind() != reflect.Pointer || sp.IsNil() {
+		return p.error("value must be a non-nil pointer")
+	}
+	fieldMap, err := p.fieldMap(sp.Elem())
+	if err != nil {
+		return err
+	}
 	for {
 		tok, err := p.next()
 		if err != nil {
 			if err == errEOF {
-				return m, nil
+				return nil
 			}
-			return nil, err
+			return err
 		}
-		if err := p.parseFieldVal(m, tok); err != nil {
-			return nil, err
+		if err := p.parseFieldVal(fieldMap, tok); err != nil {
+			return err
 		}
 	}
 }
 
-// Unmarshal parses an asspb message and writes the result into v. Unmarshal
+// Unmarshal parses a ccl message and writes the result into v. Unmarshal
 // internally calls json.Unmarshal for the reflection-based struct unpacking, so
 // feel free to use json struct tags on v, or implement UnmarshalJSON to control
 // the unmarshalling behavior.
@@ -502,13 +550,5 @@ func (p *parser) parse() (map[string]any, error) {
 func Unmarshal(data []byte, v any) error {
 	nextToken, stop := iter.Pull2(tokens(data))
 	defer stop()
-	m, err := (&parser{nextTok: nextToken, data: data}).parse()
-	if err != nil {
-		return err
-	}
-	jsonBytes, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(jsonBytes, v)
+	return (&parser{nextTok: nextToken, data: data}).parse(v)
 }
