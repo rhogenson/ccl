@@ -2,7 +2,8 @@
 //	Mom: no we have textproto at home
 //	textproto at home:
 //
-// The asspb language has similar semantics to JSON, the only exception being the lack of null.
+// The asspb language has similar semantics to JSON, the only exception being
+// the lack of null.
 //
 // # Comments
 //
@@ -130,13 +131,11 @@
 // Keys can be alphanumeric or use underscore; no other characters are
 // permitted. Values can be any of the value types here described. Key-value
 // pairs must be written with a : between the key and value, except when the
-// value is syntactically a list or a message (in that case the colon
-// is optional)
+// value is syntactically a message (in that case the colon is optional)
 //
 //	{
 //	  key1: "value1"
 //	  key2 {}
-//	  key3 []
 //	}
 //
 // As a special case, when a key is written more than once in a message, it's
@@ -153,13 +152,20 @@
 //	{
 //	  key: [1, 2, 3, 4, 5, 6]
 //	}
+//
+// # Disclaimer
+//
+// This package is still experimental, expect breaking changes.
 package asspb
 
 import (
 	"bytes"
+	"encoding"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"iter"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -194,10 +200,10 @@ type structField struct {
 	name string
 }
 
-func fieldMap(out map[structField]int, types map[reflect.Type]bool, s reflect.Type) {
+func fieldMap(out map[structField]int, types map[reflect.Type]bool, s reflect.Type) error {
 	if types[s] {
 		// Already processed
-		return
+		return nil
 	}
 	types[s] = true
 	for i := range s.NumField() {
@@ -207,29 +213,42 @@ func fieldMap(out map[structField]int, types map[reflect.Type]bool, s reflect.Ty
 		}
 		fieldName := field.Name
 		if tag, ok := field.Tag.Lookup("ccl"); ok {
-			fieldName, _, _ = strings.Cut(tag, ",")
+			var opts string
+			fieldName, opts, _ = strings.Cut(tag, ",")
 			if fieldName == "-" {
 				continue
 			}
+			for opt := range strings.FieldsFuncSeq(opts, func(r rune) bool { return r == ',' }) {
+				return fmt.Errorf("unknown option %q", opt)
+			}
+		}
+		if _, ok := out[structField{s, fieldName}]; ok {
+			return fmt.Errorf("multiple fields with name %q", fieldName)
 		}
 		out[structField{s, fieldName}] = i
 		if field.Type.Kind() == reflect.Struct {
-			fieldMap(out, types, field.Type)
+			if err := fieldMap(out, types, field.Type); err != nil {
+				return err
+			}
 		} else if (field.Type.Kind() == reflect.Pointer || field.Type.Kind() == reflect.Slice) && field.Type.Elem().Kind() == reflect.Struct {
-			fieldMap(out, types, field.Type.Elem())
+			if err := fieldMap(out, types, field.Type.Elem()); err != nil {
+				return err
+			}
 		} else if field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Pointer && field.Type.Elem().Elem().Kind() == reflect.Struct {
-			fieldMap(out, types, field.Type.Elem().Elem())
+			if err := fieldMap(out, types, field.Type.Elem().Elem()); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 type parser struct {
-	nextTok  func() (token, error, bool)
-	tok      []byte
-	err      error
-	data     []byte
-	i        int
-	fieldMap map[structField]int
+	nextTok func() (token, error, bool)
+	tok     []byte
+	err     error
+	data    []byte
+	i       int
 }
 
 func (p *parser) error(reason string, args ...any) error {
@@ -265,43 +284,50 @@ func (p *parser) next() ([]byte, error) {
 	return tok, nil
 }
 
-var numRE = regexp.MustCompile(`^[-+]?(0[xX][0-9a-fA-F]+|((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?)$`)
+var (
+	numRE = regexp.MustCompile(`^[-+]?(0[xX][0-9a-fA-F]+|((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?)$`)
+	hexRE = regexp.MustCompile(`^([-+]?)0[xX]`)
+)
 
-func (p *parser) parseNum(out reflect.Value, numBytes []byte) error {
+func (p *parser) parseNum(numBytes []byte) (any, error) {
 	if !numRE.Match(numBytes) {
-		return p.error("invalid number")
+		return nil, p.error("invalid number")
 	}
-	if bytes.HasPrefix(numBytes, []byte("0x")) || bytes.HasPrefix(numBytes, []byte("0X")) {
-		if out.Kind() != reflect.Int64 {
-			return p.error("field must be int64")
+	if hex := hexRE.FindSubmatch(numBytes); hex != nil {
+		if string(hex[1]) == "-" {
+			n, err := strconv.ParseInt(string(numBytes[len(hex[0]):]), 16, 64)
+			if err != nil {
+				return nil, p.error("invalid number")
+			}
+			return -n, nil
+		} else {
+			n, err := strconv.ParseUint(string(numBytes[len(hex[0]):]), 16, 64)
+			if err != nil {
+				return nil, p.error("invalid number")
+			}
+			return n, nil
 		}
-		n, err := strconv.ParseInt(string(numBytes[2:]), 16, 64)
-		if err != nil {
-			return p.error("invalid number")
-		}
-		out.SetInt(n)
-		return nil
 	}
 	if bytes.ContainsAny(numBytes, ".eE") {
-		if out.Kind() != reflect.Float64 {
-			return p.error("field must be float64")
-		}
 		n, err := strconv.ParseFloat(string(numBytes), 64)
 		if err != nil {
-			return p.error("invalid number")
+			return nil, p.error("invalid number")
 		}
-		out.SetFloat(n)
-		return nil
+		return n, nil
 	}
-	if out.Kind() != reflect.Int64 {
-		return p.error("field must be int64")
+	if bytes.HasPrefix(numBytes, []byte("-")) {
+		n, err := strconv.ParseInt(string(numBytes), 10, 64)
+		if err != nil {
+			return nil, p.error("invalid number")
+		}
+		return n, nil
+	} else {
+		n, err := strconv.ParseUint(string(bytes.TrimPrefix(numBytes, []byte("+"))), 10, 64)
+		if err != nil {
+			return nil, p.error("invalid number")
+		}
+		return n, nil
 	}
-	n, err := strconv.ParseInt(string(numBytes), 10, 64)
-	if err != nil {
-		return p.error("invalid number")
-	}
-	out.SetInt(n)
-	return nil
 }
 
 var escapesRE = regexp.MustCompile(`(?s)\\(.|\r\n|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`)
@@ -380,185 +406,338 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 	return escaped, nil
 }
 
-func (p *parser) parseString(out reflect.Value, tok []byte) error {
-	if out.Kind() != reflect.String {
-		return p.error("field must be string")
-	}
+func (p *parser) parseString(tok []byte) (string, error) {
 	s := new(strings.Builder)
 	for {
 		ss, err := p.unescape(tok[1 : len(tok)-1])
 		if err != nil {
-			return err
+			return "", err
 		}
 		s.Write(ss)
 		nextTok, err := p.peek()
 		if err != nil || nextTok[0] != '\'' && nextTok[0] != '"' {
-			out.SetString(s.String())
-			return nil
+			return s.String(), nil
 		}
 		p.next()
 		tok = nextTok
 	}
 }
 
-func (p *parser) parseMessage(out reflect.Value) error {
-	if !(out.Kind() == reflect.Struct || out.Kind() == reflect.Pointer && out.Type().Elem().Kind() == reflect.Struct) {
-		return p.error("type must be a struct or pointer to struct (got %s)", out.Type())
-	}
-	if out.Kind() == reflect.Pointer {
-		if out.IsNil() {
-			out.Set(reflect.New(out.Type().Elem()))
-		}
-		out = out.Elem()
-	}
+func (p *parser) parseMessage() (map[string][]any, error) {
+	m := make(map[string][]any)
 	for {
 		tok, err := p.next()
 		if err != nil || tok[0] == '}' {
-			return err
+			return m, err
 		}
-		if err := p.parseFieldVal(out, tok); err != nil {
-			return err
+		if err := p.parseFieldVal(m, tok); err != nil {
+			return nil, err
 		}
 	}
 }
 
-func (p *parser) parseVal(out reflect.Value, tok []byte) error {
-	var err error
+func (p *parser) parseVal(tok []byte) ([]any, error) {
 	switch tok[0] {
 	case '{':
-		err = p.parseMessage(out)
+		m, err := p.parseMessage()
+		if err != nil {
+			return nil, err
+		}
+		return []any{m}, nil
 	case '[':
-		err = p.parseList(out)
+		return p.parseList()
 	case '\'', '"':
-		err = p.parseString(out, tok)
+		s, err := p.parseString(tok)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s}, nil
 	default:
 		switch string(tok) {
 		case "true", "yes", "on":
-			if out.Kind() != reflect.Bool {
-				return p.error("field must be bool")
-			}
-			out.SetBool(true)
+			return []any{true}, nil
 		case "false", "no", "off":
-			if out.Kind() != reflect.Bool {
-				return p.error("field must be bool")
-			}
-			out.SetBool(false)
+			return []any{false}, nil
 		default:
-			err = p.parseNum(out, tok)
+			n, err := p.parseNum(tok)
+			if err != nil {
+				return nil, err
+			}
+			return []any{n}, nil
 		}
 	}
-	return err
 }
 
-func (p *parser) parseList(out reflect.Value) error {
-	if out.Kind() != reflect.Slice {
-		return p.error("field must be slice")
-	}
-	if out.IsNil() {
-		// Not technically necessary since nil slices are usually treated the
-		// same as any empty slice, but usually nil would mean that the user
-		// didn't set the value, at least for types that have a nil.
-		out.Set(reflect.MakeSlice(out.Type(), 0, 0))
-	}
+func (p *parser) parseList() ([]any, error) {
+	var l []any
 	for i := 0; ; i++ {
 		tok, err := p.next()
 		if err != nil || tok[0] == ']' {
-			return err
+			return l, err
 		}
 		if i > 0 {
 			if tok[0] != ',' {
-				return p.error("expecting comma")
+				return nil, p.error("expecting comma")
 			}
 			tok, err = p.next()
 			if err != nil || tok[0] == ']' { // allow trailing comma
-				return err
+				return l, err
 			}
 		}
-		out.Set(reflect.Append(out, reflect.Zero(out.Type().Elem())))
-		if err := p.parseVal(out.Index(out.Len()-1), tok); err != nil {
-			return err
+		vs, err := p.parseVal(tok)
+		if err != nil {
+			return nil, err
 		}
+		l = append(l, vs...)
 	}
 }
 
-func (p *parser) appendVal(out reflect.Value, tok []byte) error {
-	if tok[0] == '[' || out.Kind() != reflect.Slice {
-		if err := p.parseVal(out, tok); err != nil {
-			return err
-		}
-	} else {
-		out.Set(reflect.Append(out, reflect.Zero(out.Type().Elem())))
-		if err := p.parseVal(out.Index(out.Len()-1), tok); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (p *parser) parseFieldVal(out reflect.Value, field []byte) error {
+func (p *parser) parseFieldVal(m map[string][]any, field []byte) error {
 	if b := field[0]; !(b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z') {
 		return p.error("expecting field")
-	}
-	fieldIdx, ok := p.fieldMap[structField{out.Type(), string(field)}]
-	if !ok {
-		return p.error("no field named %q", field)
 	}
 	tok, err := p.next()
 	if err != nil {
 		return err
 	}
 	switch tok[0] {
-	case '{', '[':
-		if err := p.appendVal(out.Field(fieldIdx), tok); err != nil {
+	case '{':
+		vs, err := p.parseVal(tok)
+		if err != nil {
 			return err
 		}
+		m[string(field)] = append(m[string(field)], vs...)
 	case ':':
 		tok, err := p.next()
 		if err != nil {
 			return err
 		}
-		if err := p.appendVal(out.Field(fieldIdx), tok); err != nil {
+		vs, err := p.parseVal(tok)
+		if err != nil {
 			return err
 		}
+		m[string(field)] = append(m[string(field)], vs...)
 	default:
 		return p.error("expecting colon")
 	}
 	return nil
 }
 
-func (p *parser) parse(v any) error {
-	sp := reflect.ValueOf(v)
-	if sp.Kind() != reflect.Pointer || sp.IsNil() || sp.Elem().Kind() != reflect.Struct {
-		return p.error("value must be a non-nil pointer to a struct")
-	}
-	p.fieldMap = make(map[structField]int)
-	fieldMap(p.fieldMap, make(map[reflect.Type]bool), sp.Type().Elem())
+func (p *parser) parse() (map[string][]any, error) {
+	m := make(map[string][]any)
 	for {
 		tok, err := p.next()
 		if err != nil {
 			if err == errEOF {
-				return nil
+				return m, nil
 			}
-			return err
+			return nil, err
 		}
-		if err := p.parseFieldVal(sp.Elem(), tok); err != nil {
-			return err
+		if err := p.parseFieldVal(m, tok); err != nil {
+			return nil, err
 		}
 	}
 }
 
-// Unmarshal parses a ccl message and writes the result into v. Unmarshal
-// internally calls json.Unmarshal for the reflection-based struct unpacking, so
-// feel free to use json struct tags on v, or implement UnmarshalJSON to control
-// the unmarshalling behavior.
+func intLimits(kind reflect.Kind) (min int64, max uint64, ok bool) {
+	switch kind {
+	case reflect.Int:
+		return math.MinInt, math.MaxInt, true
+	case reflect.Int8:
+		return math.MinInt8, math.MaxInt8, true
+	case reflect.Int16:
+		return math.MinInt16, math.MaxInt16, true
+	case reflect.Int32:
+		return math.MinInt32, math.MaxInt32, true
+	case reflect.Int64:
+		return math.MinInt64, math.MaxInt64, true
+	case reflect.Uint:
+		return 0, math.MaxUint, true
+	case reflect.Uint8:
+		return 0, math.MaxUint8, true
+	case reflect.Uint16:
+		return 0, math.MaxUint16, true
+	case reflect.Uint32:
+		return 0, math.MaxUint32, true
+	case reflect.Uint64:
+		return 0, math.MaxUint64, true
+	default:
+		return 0, 0, false
+	}
+}
+
+func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, field string) error {
+	switch val := val.(type) {
+	case bool:
+		switch fieldVal.Kind() {
+		case reflect.Bool:
+			fieldVal.SetBool(val)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if val {
+				fieldVal.SetInt(1)
+			} else {
+				fieldVal.SetInt(0)
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if val {
+				fieldVal.SetUint(1)
+			} else {
+				fieldVal.SetUint(0)
+			}
+		default:
+			return fmt.Errorf("field %q should have type bool", field)
+		}
+	case uint64:
+		switch fieldVal.Kind() {
+		case reflect.Float32, reflect.Float64:
+			fieldVal.SetFloat(float64(val))
+			return nil
+		}
+		min, max, ok := intLimits(fieldVal.Kind())
+		if !ok {
+			return fmt.Errorf("field %q should have type int", field)
+		}
+		if val > max {
+			return fmt.Errorf("number %d is out of range for %s", val, fieldVal.Kind())
+		}
+		if min == 0 { // unsigned
+			fieldVal.SetUint(val)
+		} else {
+			fieldVal.SetInt(int64(val))
+		}
+	case int64:
+		switch fieldVal.Kind() {
+		case reflect.Float32, reflect.Float64:
+			fieldVal.SetFloat(float64(val))
+			return nil
+		}
+		min, max, ok := intLimits(fieldVal.Kind())
+		if !ok {
+			return fmt.Errorf("field %q should have type int", field)
+		}
+		if val < min || val > 0 && uint64(val) > max {
+			return fmt.Errorf("number %d is out of range for %s", val, fieldVal.Kind())
+		}
+		if min == 0 { // unsigned
+			fieldVal.SetUint(uint64(val))
+		} else {
+			fieldVal.SetInt(val)
+		}
+	case float64:
+		switch fieldVal.Kind() {
+		case reflect.Float32, reflect.Float64:
+			fieldVal.SetFloat(float64(val))
+		default:
+			return fmt.Errorf("field %q should have type float64 or float32", field)
+		}
+	case string:
+		if _, ok := fieldVal.Interface().(encoding.TextUnmarshaler); ok {
+			if fieldVal.Kind() == reflect.Pointer && fieldVal.IsNil() {
+				fieldVal.Set(reflect.New(fieldVal.Type().Elem()))
+			}
+			return fieldVal.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(val))
+		}
+		if unmarshaler, ok := fieldVal.Addr().Interface().(encoding.TextUnmarshaler); ok {
+			return unmarshaler.UnmarshalText([]byte(val))
+		}
+		switch {
+		case fieldVal.Kind() == reflect.String:
+			fieldVal.SetString(val)
+		case fieldVal.Kind() == reflect.Slice && fieldVal.Type().Elem() == reflect.TypeFor[byte]():
+			b, err := base64.StdEncoding.DecodeString(val)
+			if err != nil {
+				return fmt.Errorf("field %q: bad base64", field)
+			}
+			fieldVal.Set(reflect.ValueOf(b))
+		default:
+			return fmt.Errorf("field %q should have type string (got %s)", field, fieldVal.Type())
+		}
+	case map[string][]any:
+		if !(fieldVal.Kind() == reflect.Struct || fieldVal.Kind() == reflect.Pointer && fieldVal.Type().Elem().Kind() == reflect.Struct) {
+			return fmt.Errorf("field %q should have type struct (got %s)", field, fieldVal.Type())
+		}
+		if fieldVal.Kind() == reflect.Pointer {
+			if fieldVal.IsNil() {
+				fieldVal.Set(reflect.New(fieldVal.Type().Elem()))
+			}
+			fieldVal = fieldVal.Elem()
+		}
+		if err := unpackStruct(fieldVal, fieldMap, val); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[string][]any) error {
+	for field, vals := range msg {
+		fieldIdx, ok := fieldMap[structField{out.Type(), field}]
+		if !ok {
+			return fmt.Errorf("no field named %q", field)
+		}
+		fieldVal := out.Field(fieldIdx)
+		if fieldVal.Kind() == reflect.Slice && fieldVal.Type().Elem() != reflect.TypeFor[byte]() {
+			l := reflect.MakeSlice(fieldVal.Type(), len(vals), len(vals))
+			for i, val := range vals {
+				if err := unpackVal(l.Index(i), fieldMap, val, field); err != nil {
+					return err
+				}
+			}
+			if fieldVal.IsNil() {
+				fieldVal.Set(reflect.MakeSlice(fieldVal.Type(), 0, 0))
+			}
+			fieldVal.Set(reflect.AppendSlice(fieldVal, l))
+			continue
+		}
+		if len(vals) != 1 {
+			return fmt.Errorf("field %q is not repeated", field)
+		}
+		if err := unpackVal(fieldVal, fieldMap, vals[0], field); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Unmarshal parses a asspb message and writes the result into v. v must be a
+// non-nil pointer to a struct.
 //
 // Unmarshal accepts a top-level message, which is equivalent to the "message"
 // type described above, but without the surrounding braces. For example:
 //
 //	key1: "val1"
 //	key2: "val2"
+//
+// The exact semantics of which asspb types map to which Go types is a bit
+// complicated and I don't feel like writing out all the rules, so suffice it
+// to say that the usual stuff should work. As a special case, a []byte field
+// expects a base64-encoded string.
+//
+// You can override a field's name using a struct tag "ccl", for example
+//
+//	type message struct {
+//	    MyField int `ccl:"my_field"`
+//	}
+//
+// This message could decode, for example `my_field:5`
+//
+// If a field has type T where T or *T implements [encoding.TextUnmarshaler],
+// then a string value will be decoded by calling UnmarshalText. No other
+// customization is supported, this isn't encoding/json.
 func Unmarshal(data []byte, v any) error {
+	val := reflect.ValueOf(v)
+	if val.Kind() != reflect.Pointer || val.IsNil() || val.Type().Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("value must be a non-nil pointer to a struct")
+	}
+	fields := make(map[structField]int)
+	if err := fieldMap(fields, make(map[reflect.Type]bool), val.Type().Elem()); err != nil {
+		return err
+	}
 	nextToken, stop := iter.Pull2(tokens(data))
 	defer stop()
-	return (&parser{nextTok: nextToken, data: data}).parse(v)
+	msg, err := (&parser{nextTok: nextToken, data: data}).parse()
+	if err != nil {
+		return err
+	}
+	return unpackStruct(val.Elem(), fields, msg)
 }
