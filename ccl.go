@@ -2,8 +2,8 @@
 //	Mom: no we have textproto at home
 //	textproto at home:
 //
-// The asspb language has similar semantics to JSON, the only exception being
-// the lack of null.
+// The ccl language has similar semantics to JSON, the only exception being the
+// lack of null.
 //
 // # Comments
 //
@@ -156,7 +156,7 @@
 // # Disclaimer
 //
 // This package is still experimental, expect breaking changes.
-package asspb
+package ccl
 
 import (
 	"bytes"
@@ -699,7 +699,7 @@ func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[strin
 	return nil
 }
 
-// Unmarshal parses a asspb message and writes the result into v. v must be a
+// Unmarshal parses a ccl message and writes the result into v. v must be a
 // non-nil pointer to a struct.
 //
 // Unmarshal accepts a top-level message, which is equivalent to the "message"
@@ -708,7 +708,7 @@ func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[strin
 //	key1: "val1"
 //	key2: "val2"
 //
-// The exact semantics of which asspb types map to which Go types is a bit
+// The exact semantics of which ccl types map to which Go types is a bit
 // complicated and I don't feel like writing out all the rules, so suffice it
 // to say that the usual stuff should work. As a special case, a []byte field
 // expects a base64-encoded string.

@@ -1,4 +1,4 @@
-# asspb, the worst human-friendly configuration language
+# ccl, the worst human-friendly configuration language
 
 Don't like YAML? TOML's nested tables make your head hurt? Give me a few hours,
 how hard can writing a recursive-descent parser be...
@@ -21,6 +21,5 @@ how hard can writing a recursive-descent parser be...
         }
     }
 
-See
-[https://pkg.go.dev/roseh.moe/pkg/asspb](https://pkg.go.dev/roseh.moe/pkg/asspb)
+See [https://pkg.go.dev/roseh.moe/pkg/ccl](https://pkg.go.dev/roseh.moe/pkg/ccl)
 for the full language spec.

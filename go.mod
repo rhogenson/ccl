@@ -1,4 +1,4 @@
-module roseh.moe/pkg/asspb
+module roseh.moe/pkg/ccl
 
 go 1.24
 
