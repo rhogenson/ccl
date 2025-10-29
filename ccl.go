@@ -423,8 +423,8 @@ func (p *parser) parseString(tok []byte) (string, error) {
 	}
 }
 
-func (p *parser) parseMessage() (map[string][]any, error) {
-	m := make(map[string][]any)
+func (p *parser) parseMessage() (map[string]any, error) {
+	m := make(map[string]any)
 	for {
 		tok, err := p.next()
 		if err != nil || tok[0] == '}' {
@@ -436,14 +436,14 @@ func (p *parser) parseMessage() (map[string][]any, error) {
 	}
 }
 
-func (p *parser) parseVal(tok []byte) ([]any, error) {
+func (p *parser) parseVal(tok []byte) (any, error) {
 	switch tok[0] {
 	case '{':
 		m, err := p.parseMessage()
 		if err != nil {
 			return nil, err
 		}
-		return []any{m}, nil
+		return m, nil
 	case '[':
 		return p.parseList()
 	case '\'', '"':
@@ -451,19 +451,19 @@ func (p *parser) parseVal(tok []byte) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []any{s}, nil
+		return s, nil
 	default:
 		switch string(tok) {
 		case "true", "yes", "on":
-			return []any{true}, nil
+			return true, nil
 		case "false", "no", "off":
-			return []any{false}, nil
+			return false, nil
 		default:
 			n, err := p.parseNum(tok)
 			if err != nil {
 				return nil, err
 			}
-			return []any{n}, nil
+			return n, nil
 		}
 	}
 }
@@ -488,11 +488,27 @@ func (p *parser) parseList() ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		l = append(l, vs...)
+		l = append(l, vs)
 	}
 }
 
-func (p *parser) parseFieldVal(m map[string][]any, field []byte) error {
+func appendAny(prevVal any, newVal any) any {
+	if prevVal == nil {
+		return newVal
+	}
+	var l []any
+	if ll, ok := prevVal.([]any); ok {
+		l = ll
+	} else if prevVal != nil {
+		l = []any{prevVal}
+	}
+	if ll, ok := newVal.([]any); ok {
+		return append(l, ll...)
+	}
+	return append(l, newVal)
+}
+
+func (p *parser) parseFieldVal(m map[string]any, field []byte) error {
 	if b := field[0]; !(b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z') {
 		return p.error("expecting field")
 	}
@@ -506,7 +522,7 @@ func (p *parser) parseFieldVal(m map[string][]any, field []byte) error {
 		if err != nil {
 			return err
 		}
-		m[string(field)] = append(m[string(field)], vs...)
+		m[string(field)] = appendAny(m[string(field)], vs)
 	case ':':
 		tok, err := p.next()
 		if err != nil {
@@ -516,15 +532,15 @@ func (p *parser) parseFieldVal(m map[string][]any, field []byte) error {
 		if err != nil {
 			return err
 		}
-		m[string(field)] = append(m[string(field)], vs...)
+		m[string(field)] = appendAny(m[string(field)], vs)
 	default:
 		return p.error("expecting colon")
 	}
 	return nil
 }
 
-func (p *parser) parse() (map[string][]any, error) {
-	m := make(map[string][]any)
+func (p *parser) parse() (map[string]any, error) {
+	m := make(map[string]any)
 	for {
 		tok, err := p.next()
 		if err != nil {
@@ -652,7 +668,7 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 		default:
 			return fmt.Errorf("field %q should have type string (got %s)", field, fieldVal.Type())
 		}
-	case map[string][]any:
+	case map[string]any:
 		if !(fieldVal.Kind() == reflect.Struct || fieldVal.Kind() == reflect.Pointer && fieldVal.Type().Elem().Kind() == reflect.Struct) {
 			return fmt.Errorf("field %q should have type struct (got %s)", field, fieldVal.Type())
 		}
@@ -665,18 +681,28 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 		if err := unpackStruct(fieldVal, fieldMap, val); err != nil {
 			return err
 		}
+	case []any:
+		return fmt.Errorf("invalid repeated field")
+	default:
+		return fmt.Errorf("unexpected AST node (internal failure)")
 	}
 	return nil
 }
 
-func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[string][]any) error {
-	for field, vals := range msg {
+func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[string]any) error {
+	for field, val := range msg {
 		fieldIdx, ok := fieldMap[structField{out.Type(), field}]
 		if !ok {
 			return fmt.Errorf("no field named %q", field)
 		}
 		fieldVal := out.Field(fieldIdx)
 		if fieldVal.Kind() == reflect.Slice && fieldVal.Type().Elem() != reflect.TypeFor[byte]() {
+			var vals []any
+			if l, ok := val.([]any); ok {
+				vals = l
+			} else {
+				vals = []any{val}
+			}
 			l := reflect.MakeSlice(fieldVal.Type(), len(vals), len(vals))
 			for i, val := range vals {
 				if err := unpackVal(l.Index(i), fieldMap, val, field); err != nil {
@@ -689,10 +715,7 @@ func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[strin
 			fieldVal.Set(reflect.AppendSlice(fieldVal, l))
 			continue
 		}
-		if len(vals) != 1 {
-			return fmt.Errorf("field %q is not repeated", field)
-		}
-		if err := unpackVal(fieldVal, fieldMap, vals[0], field); err != nil {
+		if err := unpackVal(fieldVal, fieldMap, val, field); err != nil {
 			return err
 		}
 	}

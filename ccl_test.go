@@ -286,6 +286,10 @@ can just span multiple lines"`,
 		msg:  `repeated: []`,
 		want: message{Repeated: []int64{}},
 	}, {
+		desc: "RepeatedSingle",
+		msg:  `repeated: 1`,
+		want: message{Repeated: []int64{1}},
+	}, {
 		desc: "RepeatedListTrailingComma",
 		msg: `repeated: [
 					1,
@@ -351,13 +355,14 @@ func TestUnmarshal_Invalid(t *testing.T) {
 		Int int `ccl:"int"`
 	}
 	type message struct {
-		Int         int64           `ccl:"int"`
-		Int8        int8            `ccl:"int8"`
-		String      string          `ccl:"string"`
-		Msg         nestedMessage   `ccl:"msg"`
-		Repeated    []int64         `ccl:"repeated"`
-		RepeatedMsg []nestedMessage `ccl:"repeated_msg"`
-		Bytes       []byte          `ccl:"bytes"`
+		Int            int64             `ccl:"int"`
+		Int8           int8              `ccl:"int8"`
+		String         string            `ccl:"string"`
+		Msg            nestedMessage     `ccl:"msg"`
+		Repeated       []int64           `ccl:"repeated"`
+		RepeatedMsg    []nestedMessage   `ccl:"repeated_msg"`
+		Bytes          []byte            `ccl:"bytes"`
+		NestedRepeated [][]nestedMessage `ccl:"nested_repeated"`
 	}
 
 	for _, tc := range []struct {
@@ -426,6 +431,12 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "BadField",
 		msg:  `asdfasdfasdf:"asdf"`,
+	}, {
+		desc: "NestedRepeated",
+		msg:  `repeated: [[1]]`,
+	}, {
+		desc: "NestedRepeatedNestedType",
+		msg:  `nested_repeated: [[1]]`,
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
@@ -535,6 +546,10 @@ func TestUnmarshal_InvalidType(t *testing.T) {
 			F string
 			G string `ccl:"F"`
 		}),
+	}, {
+		desc: "RepeatedSingular",
+		msg:  `F:[1]`,
+		out:  new(struct{ F int }),
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
