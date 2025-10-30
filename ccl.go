@@ -592,6 +592,16 @@ func (p *parser) parse() (map[string]any, error) {
 	}
 }
 
+func setPtr(val reflect.Value) reflect.Value {
+	if val.Kind() != reflect.Pointer {
+		return val
+	}
+	if val.IsNil() {
+		val.Set(reflect.New(val.Type().Elem()))
+	}
+	return val.Elem()
+}
+
 func intLimits(kind reflect.Kind) (min, max uint64, ok bool) {
 	switch kind {
 	case reflect.Int:
@@ -622,6 +632,7 @@ func intLimits(kind reflect.Kind) (min, max uint64, ok bool) {
 func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, field string) error {
 	switch val := val.(type) {
 	case bool:
+		fieldVal := setPtr(fieldVal)
 		switch fieldVal.Kind() {
 		case reflect.Bool:
 			fieldVal.SetBool(val)
@@ -641,6 +652,7 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 			return fmt.Errorf("field %q should have type bool", field)
 		}
 	case *integer:
+		fieldVal := setPtr(fieldVal)
 		switch fieldVal.Kind() {
 		case reflect.Float32, reflect.Float64:
 			fieldVal.SetFloat(float64(val.sgn) * float64(val.n))
@@ -659,6 +671,7 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 			fieldVal.SetInt(int64(val.sgn) * int64(val.n))
 		}
 	case float64:
+		fieldVal := setPtr(fieldVal)
 		switch fieldVal.Kind() {
 		case reflect.Float32, reflect.Float64:
 			fieldVal.SetFloat(float64(val))
@@ -675,10 +688,11 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 		if unmarshaler, ok := fieldVal.Addr().Interface().(encoding.TextUnmarshaler); ok {
 			return unmarshaler.UnmarshalText([]byte(val))
 		}
+		fieldVal := setPtr(fieldVal)
 		switch {
 		case fieldVal.Kind() == reflect.String:
 			fieldVal.SetString(val)
-		case fieldVal.Kind() == reflect.Slice && fieldVal.Type().Elem() == reflect.TypeFor[byte]():
+		case fieldVal.Type() == reflect.TypeFor[[]byte]():
 			b, err := base64.StdEncoding.DecodeString(val)
 			if err != nil {
 				return fmt.Errorf("field %q: bad base64", field)
@@ -688,14 +702,9 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 			return fmt.Errorf("field %q should have type string (got %s)", field, fieldVal.Type())
 		}
 	case map[string]any:
-		if !(fieldVal.Kind() == reflect.Struct || fieldVal.Kind() == reflect.Pointer && fieldVal.Type().Elem().Kind() == reflect.Struct) {
+		fieldVal := setPtr(fieldVal)
+		if fieldVal.Kind() != reflect.Struct {
 			return fmt.Errorf("field %q should have type struct (got %s)", field, fieldVal.Type())
-		}
-		if fieldVal.Kind() == reflect.Pointer {
-			if fieldVal.IsNil() {
-				fieldVal.Set(reflect.New(fieldVal.Type().Elem()))
-			}
-			fieldVal = fieldVal.Elem()
 		}
 		if err := unpackStruct(fieldVal, fieldMap, val); err != nil {
 			return err
@@ -715,7 +724,7 @@ func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[strin
 			return fmt.Errorf("no field named %q", field)
 		}
 		fieldVal := out.Field(fieldIdx)
-		if fieldVal.Kind() == reflect.Slice && fieldVal.Type().Elem() != reflect.TypeFor[byte]() {
+		if fieldVal.Kind() == reflect.Slice && fieldVal.Type() != reflect.TypeFor[[]byte]() {
 			var vals []any
 			if l, ok := val.([]any); ok {
 				vals = l

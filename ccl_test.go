@@ -11,6 +11,7 @@ import (
 func TestUnmarshal(t *testing.T) {
 	t.Parallel()
 
+	type byteSliceWrapper []byte
 	type nestedMessage struct {
 		Field int64 `ccl:"field"`
 	}
@@ -34,8 +35,11 @@ func TestUnmarshal(t *testing.T) {
 		Repeated        []int64          `ccl:"repeated"`
 		RepeatedMessage []*nestedMessage `ccl:"repeated_message"`
 		Bytes           []byte           `ccl:"bytes"`
+		BytesWrapper    byteSliceWrapper `ccl:"bytes_wrapper"`
 		Time            time.Time        `ccl:"time"`
 		TimePointer     *time.Time       `ccl:"time_pointer"`
+		IntPointer      *int             `ccl:"int_pointer"`
+		RepeatedPointer []*int           `ccl:"repeated_pointer"`
 
 		Ignore     map[int]int `ccl:"-,"` // unlike JSON this also means ignore
 		unexported int64
@@ -330,6 +334,10 @@ from string'`,
 		msg:  `bytes:"dGVzdA=="`,
 		want: message{Bytes: []byte("test")},
 	}, {
+		desc: "NotBase64",
+		msg:  `bytes_wrapper: [1, 2, 3]`,
+		want: message{BytesWrapper: byteSliceWrapper{1, 2, 3}},
+	}, {
 		desc: "TextUnmarshaler",
 		msg:  `time:"2025-10-28T07:41:47Z"`,
 		want: message{Time: time.Date(2025, time.October, 28, 7, 41, 47, 0, time.UTC)},
@@ -337,6 +345,14 @@ from string'`,
 		desc: "TextUnmarshalerPointer",
 		msg:  `time_pointer:"2025-10-28T07:41:47Z"`,
 		want: message{TimePointer: &[]time.Time{time.Date(2025, time.October, 28, 7, 41, 47, 0, time.UTC)}[0]},
+	}, {
+		desc: "IntPointer",
+		msg:  `int_pointer: 5`,
+		want: message{IntPointer: &[]int{5}[0]},
+	}, {
+		desc: "RepeatedPointer",
+		msg:  `repeated_pointer: [1, 2, 3]`,
+		want: message{RepeatedPointer: []*int{&[]int{1}[0], &[]int{2}[0], &[]int{3}[0]}},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
@@ -454,6 +470,9 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "Base64",
 		msg:  `bytes:"dGVzdAo"`,
+	}, {
+		desc: "NotBase64",
+		msg:  `bytes:[1,2,3]`,
 	}, {
 		desc: "BadField",
 		msg:  `asdfasdfasdf:"asdf"`,
