@@ -167,7 +167,6 @@ import (
 	"iter"
 	"math"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -284,121 +283,159 @@ func (p *parser) next() ([]byte, error) {
 	return tok, nil
 }
 
-var (
-	numRE = regexp.MustCompile(`^[-+]?(0[xX][0-9a-fA-F]+|((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?)$`)
-	hexRE = regexp.MustCompile(`^([-+]?)0[xX]`)
-)
-
-func (p *parser) parseNum(numBytes []byte) (any, error) {
-	if !numRE.Match(numBytes) {
-		return nil, p.error("invalid number")
+func checkNum(b []byte) bool {
+	if bytes.Equal(b, []byte("0")) {
+		return true
 	}
-	if hex := hexRE.FindSubmatch(numBytes); hex != nil {
-		if string(hex[1]) == "-" {
-			n, err := strconv.ParseInt(string(numBytes[len(hex[0]):]), 16, 64)
-			if err != nil {
-				return nil, p.error("invalid number")
-			}
-			return -n, nil
-		} else {
-			n, err := strconv.ParseUint(string(numBytes[len(hex[0]):]), 16, 64)
-			if err != nil {
-				return nil, p.error("invalid number")
-			}
-			return n, nil
+	if len(b) == 0 || !(b[0] == '.' || '1' <= b[0] && b[0] <= '9') {
+		return false
+	}
+	haveDigits := false
+	for ; len(b) > 0 && '0' <= b[0] && b[0] <= '9'; b = b[1:] {
+		haveDigits = true
+	}
+	if len(b) > 0 && b[0] == '.' {
+		b = b[1:]
+		for ; len(b) > 0 && '0' <= b[0] && b[0] <= '9'; b = b[1:] {
+			haveDigits = true
 		}
 	}
-	if bytes.ContainsAny(numBytes, ".eE") {
-		n, err := strconv.ParseFloat(string(numBytes), 64)
-		if err != nil {
-			return nil, p.error("invalid number")
-		}
-		return n, nil
+	if !haveDigits {
+		return false
 	}
-	if bytes.HasPrefix(numBytes, []byte("-")) {
-		n, err := strconv.ParseInt(string(numBytes), 10, 64)
-		if err != nil {
-			return nil, p.error("invalid number")
-		}
-		return n, nil
-	} else {
-		n, err := strconv.ParseUint(string(bytes.TrimPrefix(numBytes, []byte("+"))), 10, 64)
-		if err != nil {
-			return nil, p.error("invalid number")
-		}
-		return n, nil
+	if len(b) == 0 || !(b[0] == 'e' || b[0] == 'E') {
+		return true
 	}
+	b = b[1:]
+	if len(b) > 0 && b[0] == '-' || b[0] == '+' {
+		b = b[1:]
+	}
+	if len(b) == 0 {
+		return false
+	}
+	for ; len(b) > 0 && '0' <= b[0] && b[0] <= '9'; b = b[1:] {
+	}
+	return len(b) == 0
 }
 
-var escapesRE = regexp.MustCompile(`(?s)\\(.|\r\n|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})`)
+type integer struct {
+	n   uint64
+	sgn int8
+}
 
-func init() {
-	escapesRE.Longest()
+func (p *parser) parseNum(numBytes []byte) (any, error) {
+	n := numBytes
+	var sgn int8 = 1
+	switch numBytes[0] {
+	case '-':
+		sgn = -1
+		n = numBytes[1:]
+	case '+':
+		n = numBytes[1:]
+	}
+	if len(n) > 2 && n[0] == '0' && (n[1] == 'x' || n[1] == 'X') {
+		n, err := strconv.ParseUint(string(n[2:]), 16, 64)
+		if err != nil {
+			return nil, p.error("invalid hex number: %s", err)
+		}
+		return &integer{n, sgn}, nil
+	}
+	if !checkNum(n) {
+		return nil, p.error("invalid number")
+	}
+	if bytes.ContainsAny(n, ".eE") {
+		n, err := strconv.ParseFloat(string(numBytes), 64)
+		if err != nil {
+			return nil, p.error("invalid number (unreachable)")
+		}
+		return n, nil
+	}
+	un, err := strconv.ParseUint(string(n), 10, 64)
+	if err != nil {
+		return nil, p.error("invalid number (unreachable)")
+	}
+	return &integer{un, sgn}, nil
 }
 
 func (p *parser) unescape(rawStr []byte) ([]byte, error) {
-	var err error
-	escaped := escapesRE.ReplaceAllFunc(rawStr, func(escape []byte) []byte {
-		switch string(escape) {
-		case `\'`:
-			return []byte("'")
-		case `\"`:
-			return []byte(`"`)
-		case `\?`:
-			return []byte("?")
-		case `\\`:
-			return []byte(`\`)
-		case `\a`:
-			return []byte("\a")
-		case `\b`:
-			return []byte("\b")
-		case `\f`:
-			return []byte("\f")
-		case `\n`:
-			return []byte("\n")
-		case `\r`:
-			return []byte("\r")
-		case `\t`:
-			return []byte("\t")
-		case `\v`:
-			return []byte("\v")
-		case "\\\n", "\\\r\n":
-			return nil
+	var escaped []byte
+	for i := 0; i < len(rawStr); i++ {
+		if rawStr[i] != '\\' {
+			escaped = append(escaped, rawStr[i])
+			continue
 		}
-		switch {
-		case bytes.HasPrefix(escape, []byte(`\x`)):
-			var n uint64
-			if n, err = strconv.ParseUint(string(escape[2:]), 16, 8); err != nil {
-				err = p.error("invalid hex escape %q: %s", escape, err)
-				return nil
+		i++
+		var b []byte
+		switch rawStr[i] {
+		case '\'':
+			b = []byte("'")
+		case '"':
+			b = []byte(`"`)
+		case '?':
+			b = []byte("?")
+		case '\\':
+			b = []byte(`\`)
+		case 'a':
+			b = []byte("\a")
+		case 'b':
+			b = []byte("\b")
+		case 'f':
+			b = []byte("\f")
+		case 'n':
+			b = []byte("\n")
+		case 'r':
+			b = []byte("\r")
+		case 't':
+			b = []byte("\t")
+		case 'v':
+			b = []byte("\v")
+		case '\n':
+			b = nil
+		case '\r':
+			i++
+			if i < len(rawStr) && rawStr[i] == '\n' {
+				b = nil
+			} else {
+				return nil, fmt.Errorf("invalid escape sequence %q", rawStr[i-2:min(i+1, len(rawStr))])
 			}
-			return []byte{byte(n)}
-		case bytes.HasPrefix(escape, []byte(`\u`)), bytes.HasPrefix(escape, []byte(`\U`)):
-			var n int64
-			if n, err = strconv.ParseInt(string(escape[2:]), 16, 32); err != nil {
-				err = p.error("invalid unicode escape %q: %s", escape, err)
-				return nil
+		case 'x':
+			i++
+			if i+2 > len(rawStr) {
+				return nil, fmt.Errorf("invalid hex escape %q", rawStr[i-2:min(i+2, len(rawStr))])
 			}
-			return utf8.AppendRune(nil, rune(n))
+			n, err := strconv.ParseUint(string(rawStr[i:i+2]), 16, 8)
+			if err != nil {
+				return nil, fmt.Errorf("invalid hex escape %q: %s", rawStr[i-2:i+2], err)
+			}
+			i++
+			b = []byte{byte(n)}
+		case 'u', 'U':
+			nBytes := 4
+			if rawStr[i] == 'U' {
+				nBytes = 8
+			}
+			i++
+			if i+nBytes > len(rawStr) {
+				return nil, fmt.Errorf("invalid unicode escape %q", rawStr[i-2:min(i+nBytes, len(rawStr))])
+			}
+			n, err := strconv.ParseUint(string(rawStr[i:i+nBytes]), 16, 31)
+			if err != nil {
+				return nil, fmt.Errorf("invalid hex escape %q: %s", rawStr[i-2:i+2], err)
+			}
+			i += nBytes - 1
+			b = utf8.AppendRune(nil, rune(n))
 		default:
-			if len(escape) != 4 {
-				err = p.error("invalid string escape %q", escape)
-				return nil
+			if i+3 > len(rawStr) {
+				return nil, fmt.Errorf("invalid string escape %q", rawStr[i-1:i+1])
 			}
-			var n int64
-			if n, err = strconv.ParseInt(string(escape[1:]), 8, 32); err != nil {
-				err = p.error("invalid string escape %q", escape)
-				return nil
+			n, err := strconv.ParseUint(string(rawStr[i:i+3]), 8, 8)
+			if err != nil {
+				return nil, fmt.Errorf("invalid octal escape %q: %s", rawStr[i:i+3], err)
 			}
-			if n > 255 {
-				err = p.error("invalid octal escape %q %d > 255", escape, n)
-				return nil
-			}
-			return []byte{byte(n)}
+			i += 2
+			b = []byte{byte(n)}
 		}
-	})
-	if err != nil {
-		return nil, err
+		escaped = append(escaped, b...)
 	}
 	if !utf8.Valid(escaped) {
 		return nil, p.error("syntax error: string %q is not UTF-8 encoded", escaped)
@@ -499,7 +536,7 @@ func appendAny(prevVal any, newVal any) any {
 	var l []any
 	if ll, ok := prevVal.([]any); ok {
 		l = ll
-	} else if prevVal != nil {
+	} else {
 		l = []any{prevVal}
 	}
 	if ll, ok := newVal.([]any); ok {
@@ -555,18 +592,18 @@ func (p *parser) parse() (map[string]any, error) {
 	}
 }
 
-func intLimits(kind reflect.Kind) (min int64, max uint64, ok bool) {
+func intLimits(kind reflect.Kind) (min, max uint64, ok bool) {
 	switch kind {
 	case reflect.Int:
-		return math.MinInt, math.MaxInt, true
+		return -math.MinInt, math.MaxInt, true
 	case reflect.Int8:
-		return math.MinInt8, math.MaxInt8, true
+		return -math.MinInt8, math.MaxInt8, true
 	case reflect.Int16:
-		return math.MinInt16, math.MaxInt16, true
+		return -math.MinInt16, math.MaxInt16, true
 	case reflect.Int32:
-		return math.MinInt32, math.MaxInt32, true
+		return -math.MinInt32, math.MaxInt32, true
 	case reflect.Int64:
-		return math.MinInt64, math.MaxInt64, true
+		return -math.MinInt64, math.MaxInt64, true
 	case reflect.Uint:
 		return 0, math.MaxUint, true
 	case reflect.Uint8:
@@ -603,41 +640,23 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 		default:
 			return fmt.Errorf("field %q should have type bool", field)
 		}
-	case uint64:
+	case *integer:
 		switch fieldVal.Kind() {
 		case reflect.Float32, reflect.Float64:
-			fieldVal.SetFloat(float64(val))
+			fieldVal.SetFloat(float64(val.sgn) * float64(val.n))
 			return nil
 		}
 		min, max, ok := intLimits(fieldVal.Kind())
 		if !ok {
 			return fmt.Errorf("field %q should have type int", field)
 		}
-		if val > max {
+		if val.sgn < 0 && val.n > min || val.sgn > 0 && val.n > max {
 			return fmt.Errorf("number %d is out of range for %s", val, fieldVal.Kind())
 		}
 		if min == 0 { // unsigned
-			fieldVal.SetUint(val)
+			fieldVal.SetUint(val.n)
 		} else {
-			fieldVal.SetInt(int64(val))
-		}
-	case int64:
-		switch fieldVal.Kind() {
-		case reflect.Float32, reflect.Float64:
-			fieldVal.SetFloat(float64(val))
-			return nil
-		}
-		min, max, ok := intLimits(fieldVal.Kind())
-		if !ok {
-			return fmt.Errorf("field %q should have type int", field)
-		}
-		if val < min || val > 0 && uint64(val) > max {
-			return fmt.Errorf("number %d is out of range for %s", val, fieldVal.Kind())
-		}
-		if min == 0 { // unsigned
-			fieldVal.SetUint(uint64(val))
-		} else {
-			fieldVal.SetInt(val)
+			fieldVal.SetInt(int64(val.sgn) * int64(val.n))
 		}
 	case float64:
 		switch fieldVal.Kind() {
@@ -684,7 +703,7 @@ func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, fi
 	case []any:
 		return fmt.Errorf("invalid repeated field")
 	default:
-		return fmt.Errorf("unexpected AST node (internal failure)")
+		return fmt.Errorf("unexpected AST node (unreachable)")
 	}
 	return nil
 }

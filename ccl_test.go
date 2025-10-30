@@ -260,6 +260,10 @@ can just span multiple lines"`,
 		msg:  `string: '\u2014'`,
 		want: message{String: "—"},
 	}, {
+		desc: "StringBigUnicode",
+		msg:  `string: '\U0001f600'`,
+		want: message{String: "😀"},
+	}, {
 		desc: "StringOctal",
 		msg:  `string: '\033'`,
 		want: message{String: "\033"},
@@ -357,6 +361,7 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	type message struct {
 		Int            int64             `ccl:"int"`
 		Int8           int8              `ccl:"int8"`
+		Float          float64           `ccl:"float"`
 		String         string            `ccl:"string"`
 		Msg            nestedMessage     `ccl:"msg"`
 		Repeated       []int64           `ccl:"repeated"`
@@ -372,11 +377,32 @@ func TestUnmarshal_Invalid(t *testing.T) {
 		desc: "BadNum",
 		msg:  `int: .`,
 	}, {
+		desc: "WeirdNum",
+		msg:  `float:1e+`,
+	}, {
+		desc: "BadHex",
+		msg:  `int:0xgg`,
+	}, {
 		desc: "BadStringEscape",
 		msg:  `string: '\g'`,
 	}, {
 		desc: "BadDoubleStringEscape",
 		msg:  `string: "\g"`,
+	}, {
+		desc: "StringBadReturnEscape",
+		msg:  "string:'\\\r'",
+	}, {
+		desc: "StringShortHex",
+		msg:  `string:"\x1"`,
+	}, {
+		desc: "StringBadHex",
+		msg:  `string:"\xgg"`,
+	}, {
+		desc: "StringShortUnicode",
+		msg:  `string:"\u001"`,
+	}, {
+		desc: "StringBadUnicode",
+		msg:  `string:"\ugggg"`,
 	}, {
 		desc: "UnterminatedString",
 		msg:  `string: '`,
