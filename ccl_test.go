@@ -623,3 +623,60 @@ func ExampleUnmarshal() {
 	// Output:
 	// 301 https://$host$request_uri
 }
+
+func BenchmarkLex(b *testing.B) {
+	msg := []byte(`
+		# This is a comment
+		string: 'asdf\n' # comment end of line
+		string2: "asdf\n"
+		int: 10
+		float: 10.5e13
+		bool: true
+		bool2: false
+		message { field: 10 }
+		repeated: [1, 2, 3]
+		repeated: 4
+		repeated: [5, 6]
+	`)
+	for b.Loop() {
+		for _, err := range tokens(msg) {
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkParse(b *testing.B) {
+	msg := []byte(`
+		# This is a comment
+		string: 'asdf\n' # comment end of line
+		string2: "asdf\n"
+		int: 10
+		float: 10.5e13
+		bool: true
+		bool2: false
+		message { field: 10 }
+		repeated: [1, 2, 3]
+		repeated: 4
+		repeated: [5, 6]
+	`)
+	type message struct {
+		String  string  `ccl:"string"`
+		String2 string  `ccl:"string2"`
+		Int     int     `ccl:"int"`
+		Float   float64 `ccl:"float"`
+		Bool    bool    `ccl:"bool"`
+		Bool2   bool    `ccl:"bool2"`
+		Message struct {
+			Field int `ccl:"field"`
+		} `ccl:"message"`
+		Repeated []int `ccl:"repeated"`
+	}
+	for b.Loop() {
+		var m message
+		if err := Unmarshal(msg, &m); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
