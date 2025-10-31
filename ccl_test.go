@@ -8,6 +8,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+func ptr[T any](v T) *T {
+	return &v
+}
+
 func TestUnmarshal(t *testing.T) {
 	t.Parallel()
 
@@ -344,15 +348,15 @@ from string'`,
 	}, {
 		desc: "TextUnmarshalerPointer",
 		msg:  `time_pointer:"2025-10-28T07:41:47Z"`,
-		want: message{TimePointer: &[]time.Time{time.Date(2025, time.October, 28, 7, 41, 47, 0, time.UTC)}[0]},
+		want: message{TimePointer: ptr(time.Date(2025, time.October, 28, 7, 41, 47, 0, time.UTC))},
 	}, {
 		desc: "IntPointer",
 		msg:  `int_pointer: 5`,
-		want: message{IntPointer: &[]int{5}[0]},
+		want: message{IntPointer: ptr(5)},
 	}, {
 		desc: "RepeatedPointer",
 		msg:  `repeated_pointer: [1, 2, 3]`,
-		want: message{RepeatedPointer: []*int{&[]int{1}[0], &[]int{2}[0], &[]int{3}[0]}},
+		want: message{RepeatedPointer: []*int{ptr(1), ptr(2), ptr(3)}},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
