@@ -242,7 +242,7 @@ func fieldMap(out map[structField]int, types map[reflect.Type]bool, s reflect.Ty
 }
 
 type parser struct {
-	nextTok  func() (token, error)
+	lexer    lexer
 	tok      []byte
 	err      error
 	data     []byte
@@ -260,7 +260,7 @@ func (p *parser) peek() ([]byte, error) {
 	if p.err != nil || p.tok != nil {
 		return p.tok, p.err
 	}
-	tok, err := p.nextTok()
+	tok, err := p.lexer.next()
 	if err != nil {
 		p.err = err
 		return nil, p.err
@@ -742,5 +742,5 @@ func Unmarshal(data []byte, v any) error {
 	if err := fieldMap(fields, make(map[reflect.Type]bool), val.Type().Elem()); err != nil {
 		return err
 	}
-	return (&parser{nextTok: newLexer(data).next, data: data, fieldMap: fields}).parse(val.Elem())
+	return (&parser{lexer: lexer{data: data}, data: data, fieldMap: fields}).parse(val.Elem())
 }

@@ -113,7 +113,3 @@ func (l *lexer) next() (token, error) {
 	}
 	return token{}, l.error("invalid lexeme")
 }
-
-func newLexer(data []byte) *lexer {
-	return &lexer{data: data}
-}
