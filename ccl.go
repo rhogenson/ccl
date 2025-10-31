@@ -423,7 +423,7 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 			}
 			n, err := strconv.ParseUint(string(rawStr[i:i+nBytes]), 16, 31)
 			if err != nil {
-				return nil, fmt.Errorf("invalid hex escape %q: %s", rawStr[i-2:i+2], err)
+				return nil, fmt.Errorf("invalid hex escape %q: %s", rawStr[i-2:i+nBytes], err)
 			}
 			i += nBytes - 1
 			b = utf8.AppendRune(nil, rune(n))
@@ -433,7 +433,7 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 			}
 			n, err := strconv.ParseUint(string(rawStr[i:i+3]), 8, 8)
 			if err != nil {
-				return nil, fmt.Errorf("invalid octal escape %q: %s", rawStr[i:i+3], err)
+				return nil, fmt.Errorf("invalid octal escape %q: %s", rawStr[i-1:i+3], err)
 			}
 			i += 2
 			b = []byte{byte(n)}
@@ -488,6 +488,9 @@ func (p *parser) parsePossiblyRepeatedVal(fieldVal reflect.Value, parsedFields m
 		fieldVal.Set(reflect.Append(fieldVal, reflect.Zero(fieldVal.Type().Elem())))
 		return p.parseVal(fieldVal.Index(fieldVal.Len()-1), tok, field)
 	}
+	if parsedFields[string(field)] {
+		return p.error("duplicate field %q but type is not repeated", field)
+	}
 	parsedFields[string(field)] = true
 	return p.parseVal(fieldVal, tok, field)
 }
@@ -541,7 +544,7 @@ func (p *parser) parseVal(fieldVal reflect.Value, tok, field []byte) error {
 		fieldVal := setPtr(fieldVal)
 		switch fieldVal.Kind() {
 		case reflect.Float32, reflect.Float64:
-			fieldVal.SetFloat(float64(n))
+			fieldVal.SetFloat(n)
 		default:
 			return p.error("field %q should have type float64 or float32", field)
 		}
@@ -600,9 +603,6 @@ func (p *parser) parseList(fieldVal reflect.Value, field []byte) error {
 func (p *parser) parseFieldVal(out reflect.Value, parsedFields map[string]bool, field []byte) error {
 	if b := field[0]; !(b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z') {
 		return p.error("expecting field")
-	}
-	if parsedFields[string(field)] {
-		return p.error("duplicate field %q but type is not repeated", field)
 	}
 	fieldIdx, ok := p.fieldMap[structField{out.Type(), string(field)}]
 	if !ok {
