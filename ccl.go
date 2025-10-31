@@ -164,7 +164,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"iter"
 	"math"
 	"reflect"
 	"strconv"
@@ -243,7 +242,7 @@ func fieldMap(out map[structField]int, types map[reflect.Type]bool, s reflect.Ty
 }
 
 type parser struct {
-	nextTok  func() (token, error, bool)
+	nextTok  func() (token, error)
 	tok      []byte
 	err      error
 	data     []byte
@@ -261,11 +260,7 @@ func (p *parser) peek() ([]byte, error) {
 	if p.err != nil || p.tok != nil {
 		return p.tok, p.err
 	}
-	tok, err, ok := p.nextTok()
-	if !ok {
-		p.err = errEOF
-		return nil, p.err
-	}
+	tok, err := p.nextTok()
 	if err != nil {
 		p.err = err
 		return nil, p.err
@@ -747,7 +742,5 @@ func Unmarshal(data []byte, v any) error {
 	if err := fieldMap(fields, make(map[reflect.Type]bool), val.Type().Elem()); err != nil {
 		return err
 	}
-	nextToken, stop := iter.Pull2(tokens(data))
-	defer stop()
-	return (&parser{nextTok: nextToken, data: data, fieldMap: fields}).parse(val.Elem())
+	return (&parser{nextTok: newLexer(data).next, data: data, fieldMap: fields}).parse(val.Elem())
 }

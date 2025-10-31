@@ -2,7 +2,6 @@ package ccl
 
 import (
 	"bytes"
-	"iter"
 	"unicode"
 	"unicode/utf8"
 )
@@ -13,21 +12,18 @@ type token struct {
 }
 
 type lexer struct {
-	data     []byte
-	i        int
-	yieldTok func(token, error) bool
+	data []byte
+	i    int
 }
 
-func (l *lexer) error(reason string, args ...any) {
-	l.yieldTok(token{}, newSyntaxError(l.data, l.i, reason, args...))
+func (l *lexer) error(reason string, args ...any) error {
+	return newSyntaxError(l.data, l.i, reason, args...)
 }
 
-func (l *lexer) yield(n int) bool {
-	if !l.yieldTok(token{l.i, l.data[l.i : l.i+n]}, nil) {
-		return false
-	}
+func (l *lexer) yield(n int) token {
+	t := token{l.i, l.data[l.i : l.i+n]}
 	l.i += n
-	return true
+	return t
 }
 
 func (l *lexer) skipSpace() {
@@ -75,67 +71,49 @@ func fieldTailByte(b byte) bool {
 		'0' <= b && b <= '9'
 }
 
-func (l *lexer) tokens() {
-	for l.i = 0; ; {
-		l.skipSpace()
-		if l.i == len(l.data) {
-			break
-		}
-		switch l.data[l.i] {
-		case
-			'{',
-			'}',
-			'[',
-			']',
-			':',
-			',':
-
-			if !l.yield(1) {
-				return
-			}
-			continue
-		case '\'', '"':
-			q := l.data[l.i]
-			i := l.i + 1
-			for ; i < len(l.data) && l.data[i] != q; i++ {
-				if l.data[i] == '\\' {
-					i++
-				}
-			}
-			if i >= len(l.data) {
-				l.error("unterminated string")
-				return
-			}
-			if !l.yield(i + 1 - l.i) {
-				return
-			}
-			continue
-		}
-		switch b := l.data[l.i]; {
-		case numFirstByte(b):
-			i := l.i + 1
-			for ; i < len(l.data) && numTailByte(l.data[i]); i++ {
-			}
-			if !l.yield(i - l.i) {
-				return
-			}
-			continue
-		case fieldFirstByte(b):
-			i := l.i + 1
-			for ; i < len(l.data) && fieldTailByte(l.data[i]); i++ {
-			}
-			if !l.yield(i - l.i) {
-				return
-			}
-			continue
-		}
-		l.error("invalid lexeme")
-		return
+func (l *lexer) next() (token, error) {
+	l.skipSpace()
+	if l.i == len(l.data) {
+		return token{}, errEOF
 	}
+	switch l.data[l.i] {
+	case
+		'{',
+		'}',
+		'[',
+		']',
+		':',
+		',':
+
+		return l.yield(1), nil
+	case '\'', '"':
+		q := l.data[l.i]
+		i := l.i + 1
+		for ; i < len(l.data) && l.data[i] != q; i++ {
+			if l.data[i] == '\\' {
+				i++
+			}
+		}
+		if i >= len(l.data) {
+			return token{}, l.error("unterminated string")
+		}
+		return l.yield(i + 1 - l.i), nil
+	}
+	switch b := l.data[l.i]; {
+	case numFirstByte(b):
+		i := l.i + 1
+		for ; i < len(l.data) && numTailByte(l.data[i]); i++ {
+		}
+		return l.yield(i - l.i), nil
+	case fieldFirstByte(b):
+		i := l.i + 1
+		for ; i < len(l.data) && fieldTailByte(l.data[i]); i++ {
+		}
+		return l.yield(i - l.i), nil
+	}
+	return token{}, l.error("invalid lexeme")
 }
 
-func tokens(data []byte) iter.Seq2[token, error] {
-	return func(yield func(token, error) bool) {
-		(&lexer{data: data, yieldTok: yield}).tokens()
-	}
+func newLexer(data []byte) *lexer {
+	return &lexer{data: data}
 }

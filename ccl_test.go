@@ -684,8 +684,13 @@ func BenchmarkLex(b *testing.B) {
 		repeated: [5, 6]
 	`)
 	for b.Loop() {
-		for _, err := range tokens(msg) {
+		l := newLexer(msg)
+		for {
+			_, err := l.next()
 			if err != nil {
+				if err == errEOF {
+					break
+				}
 				b.Fatal(err)
 			}
 		}
