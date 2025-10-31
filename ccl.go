@@ -243,11 +243,12 @@ func fieldMap(out map[structField]int, types map[reflect.Type]bool, s reflect.Ty
 }
 
 type parser struct {
-	nextTok func() (token, error, bool)
-	tok     []byte
-	err     error
-	data    []byte
-	i       int
+	nextTok  func() (token, error, bool)
+	tok      []byte
+	err      error
+	data     []byte
+	i        int
+	fieldMap map[structField]int
 }
 
 func (p *parser) error(reason string, args ...any) error {
@@ -284,6 +285,9 @@ func (p *parser) next() ([]byte, error) {
 }
 
 func checkNum(b []byte) bool {
+	if b[0] == '-' || b[0] == '+' {
+		b = b[1:]
+	}
 	if bytes.Equal(b, []byte("0")) {
 		return true
 	}
@@ -323,7 +327,7 @@ type integer struct {
 	sgn int8
 }
 
-func (p *parser) parseNum(numBytes []byte) (any, error) {
+func (p *parser) parseInt(numBytes []byte) (integer, error) {
 	n := numBytes
 	var sgn int8 = 1
 	switch numBytes[0] {
@@ -336,25 +340,29 @@ func (p *parser) parseNum(numBytes []byte) (any, error) {
 	if len(n) > 2 && n[0] == '0' && (n[1] == 'x' || n[1] == 'X') {
 		n, err := strconv.ParseUint(string(n[2:]), 16, 64)
 		if err != nil {
-			return nil, p.error("invalid hex number: %s", err)
+			return integer{}, p.error("invalid hex number: %s", err)
 		}
-		return &integer{n, sgn}, nil
+		return integer{n, sgn}, nil
 	}
-	if !checkNum(n) {
-		return nil, p.error("invalid number")
-	}
-	if bytes.ContainsAny(n, ".eE") {
-		n, err := strconv.ParseFloat(string(numBytes), 64)
-		if err != nil {
-			return nil, p.error("invalid number (unreachable)")
-		}
-		return n, nil
+	if !checkNum(numBytes) {
+		return integer{}, p.error("invalid number")
 	}
 	un, err := strconv.ParseUint(string(n), 10, 64)
 	if err != nil {
-		return nil, p.error("invalid number (unreachable)")
+		return integer{}, p.error("invalid number (unreachable)")
 	}
-	return &integer{un, sgn}, nil
+	return integer{un, sgn}, nil
+}
+
+func (p *parser) parseFloat(nBytes []byte) (float64, error) {
+	if !checkNum(nBytes) {
+		return 0, p.error("invalid number")
+	}
+	n, err := strconv.ParseFloat(string(nBytes), 64)
+	if err != nil {
+		return 0, p.error("invalid number (unreachable)")
+	}
+	return n, nil
 }
 
 func (p *parser) unescape(rawStr []byte) ([]byte, error) {
@@ -460,134 +468,187 @@ func (p *parser) parseString(tok []byte) (string, error) {
 	}
 }
 
-func (p *parser) parseMessage() (map[string]any, error) {
-	m := make(map[string]any)
+func (p *parser) parseMessage(out reflect.Value, field []byte) error {
+	out = setPtr(out)
+	if out.Kind() != reflect.Struct {
+		return p.error("field %q should be a struct", field)
+	}
+	seen := make(map[string]bool)
 	for {
 		tok, err := p.next()
 		if err != nil || tok[0] == '}' {
-			return m, err
+			return err
 		}
-		if err := p.parseFieldVal(m, tok); err != nil {
-			return nil, err
+		if err := p.parseFieldVal(out, seen, tok); err != nil {
+			return err
 		}
 	}
 }
 
-func (p *parser) parseVal(tok []byte) (any, error) {
-	switch tok[0] {
-	case '{':
-		m, err := p.parseMessage()
-		if err != nil {
-			return nil, err
+func (p *parser) parsePossiblyRepeatedVal(fieldVal reflect.Value, parsedFields map[string]bool, tok, field []byte) error {
+	if fieldVal.Kind() == reflect.Slice && fieldVal.Type() != reflect.TypeFor[[]byte]() {
+		if tok[0] == '[' {
+			return p.parseList(fieldVal, field)
 		}
-		return m, nil
+		fieldVal.Set(reflect.Append(fieldVal, reflect.Zero(fieldVal.Type().Elem())))
+		return p.parseVal(fieldVal.Index(fieldVal.Len()-1), tok, field)
+	}
+	parsedFields[string(field)] = true
+	return p.parseVal(fieldVal, tok, field)
+}
+
+func (p *parser) parseVal(fieldVal reflect.Value, tok, field []byte) error {
+	switch tok[0] {
 	case '[':
-		return p.parseList()
+		return p.error("invalid repeated value")
+	case '{':
+		return p.parseMessage(fieldVal, field)
 	case '\'', '"':
 		s, err := p.parseString(tok)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return s, nil
-	default:
-		switch string(tok) {
-		case "true", "yes", "on":
-			return true, nil
-		case "false", "no", "off":
-			return false, nil
-		default:
-			n, err := p.parseNum(tok)
-			if err != nil {
-				return nil, err
+		if _, ok := fieldVal.Interface().(encoding.TextUnmarshaler); ok {
+			if fieldVal.Kind() == reflect.Pointer && fieldVal.IsNil() {
+				fieldVal.Set(reflect.New(fieldVal.Type().Elem()))
 			}
-			return n, nil
+			return fieldVal.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(s))
 		}
+		if unmarshaler, ok := fieldVal.Addr().Interface().(encoding.TextUnmarshaler); ok {
+			return unmarshaler.UnmarshalText([]byte(s))
+		}
+		fieldVal := setPtr(fieldVal)
+		switch {
+		case fieldVal.Kind() == reflect.String:
+			fieldVal.SetString(s)
+		case fieldVal.Type() == reflect.TypeFor[[]byte]():
+			b, err := base64.StdEncoding.DecodeString(s)
+			if err != nil {
+				return fmt.Errorf("field %q: bad base64", field)
+			}
+			fieldVal.Set(reflect.ValueOf(b))
+		default:
+			return p.error("field %q should have type string (got %s)", field, fieldVal.Type())
+		}
+		return nil
 	}
+	switch string(tok) {
+	case "true", "yes", "on":
+		return p.unpackBool(fieldVal, true, field)
+	case "false", "no", "off":
+		return p.unpackBool(fieldVal, false, field)
+	}
+	if bytes.ContainsAny(tok, ".eE") {
+		n, err := p.parseFloat(tok)
+		if err != nil {
+			return err
+		}
+		fieldVal := setPtr(fieldVal)
+		switch fieldVal.Kind() {
+		case reflect.Float32, reflect.Float64:
+			fieldVal.SetFloat(float64(n))
+		default:
+			return p.error("field %q should have type float64 or float32", field)
+		}
+		return nil
+	}
+	n, err := p.parseInt(tok)
+	if err != nil {
+		return err
+	}
+	fieldVal = setPtr(fieldVal)
+	switch fieldVal.Kind() {
+	case reflect.Float32, reflect.Float64:
+		fieldVal.SetFloat(float64(n.sgn) * float64(n.n))
+		return nil
+	}
+	min, max, ok := intLimits(fieldVal.Kind())
+	if !ok {
+		return p.error("field %q should have type int", field)
+	}
+	if n.sgn < 0 && n.n > min || n.sgn > 0 && n.n > max {
+		return p.error("number %d is out of range for %s", n, fieldVal.Kind())
+	}
+	if min == 0 { // unsigned
+		fieldVal.SetUint(n.n)
+	} else {
+		fieldVal.SetInt(int64(n.sgn) * int64(n.n))
+	}
+	return nil
 }
 
-func (p *parser) parseList() ([]any, error) {
-	var l []any
+func (p *parser) parseList(fieldVal reflect.Value, field []byte) error {
+	if fieldVal.IsNil() {
+		fieldVal.Set(reflect.MakeSlice(fieldVal.Type(), 0, 0))
+	}
 	for i := 0; ; i++ {
 		tok, err := p.next()
 		if err != nil || tok[0] == ']' {
-			return l, err
+			return err
 		}
 		if i > 0 {
 			if tok[0] != ',' {
-				return nil, p.error("expecting comma")
+				return p.error("expecting comma")
 			}
 			tok, err = p.next()
 			if err != nil || tok[0] == ']' { // allow trailing comma
-				return l, err
+				return err
 			}
 		}
-		vs, err := p.parseVal(tok)
-		if err != nil {
-			return nil, err
+		fieldVal.Set(reflect.Append(fieldVal, reflect.Zero(fieldVal.Type().Elem())))
+		if err := p.parseVal(fieldVal.Index(fieldVal.Len()-1), tok, field); err != nil {
+			return err
 		}
-		l = append(l, vs)
 	}
 }
 
-func appendAny(prevVal any, newVal any) any {
-	if prevVal == nil {
-		return newVal
-	}
-	var l []any
-	if ll, ok := prevVal.([]any); ok {
-		l = ll
-	} else {
-		l = []any{prevVal}
-	}
-	if ll, ok := newVal.([]any); ok {
-		return append(l, ll...)
-	}
-	return append(l, newVal)
-}
-
-func (p *parser) parseFieldVal(m map[string]any, field []byte) error {
+func (p *parser) parseFieldVal(out reflect.Value, parsedFields map[string]bool, field []byte) error {
 	if b := field[0]; !(b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z') {
 		return p.error("expecting field")
 	}
+	if parsedFields[string(field)] {
+		return p.error("duplicate field %q but type is not repeated", field)
+	}
+	fieldIdx, ok := p.fieldMap[structField{out.Type(), string(field)}]
+	if !ok {
+		return fmt.Errorf("no field named %q", field)
+	}
+	fieldVal := out.Field(fieldIdx)
 	tok, err := p.next()
 	if err != nil {
 		return err
 	}
 	switch tok[0] {
 	case '{':
-		vs, err := p.parseVal(tok)
-		if err != nil {
+		if err := p.parsePossiblyRepeatedVal(fieldVal, parsedFields, tok, field); err != nil {
 			return err
 		}
-		m[string(field)] = appendAny(m[string(field)], vs)
 	case ':':
 		tok, err := p.next()
 		if err != nil {
 			return err
 		}
-		vs, err := p.parseVal(tok)
-		if err != nil {
+		if err := p.parsePossiblyRepeatedVal(fieldVal, parsedFields, tok, field); err != nil {
 			return err
 		}
-		m[string(field)] = appendAny(m[string(field)], vs)
 	default:
 		return p.error("expecting colon")
 	}
 	return nil
 }
 
-func (p *parser) parse() (map[string]any, error) {
-	m := make(map[string]any)
+func (p *parser) parse(out reflect.Value) error {
+	seen := make(map[string]bool)
 	for {
 		tok, err := p.next()
 		if err != nil {
 			if err == errEOF {
-				return m, nil
+				return nil
 			}
-			return nil, err
+			return err
 		}
-		if err := p.parseFieldVal(m, tok); err != nil {
-			return nil, err
+		if err := p.parseFieldVal(out, seen, tok); err != nil {
+			return err
 		}
 	}
 }
@@ -629,123 +690,25 @@ func intLimits(kind reflect.Kind) (min, max uint64, ok bool) {
 	}
 }
 
-func unpackVal(fieldVal reflect.Value, fieldMap map[structField]int, val any, field string) error {
-	switch val := val.(type) {
-	case bool:
-		fieldVal := setPtr(fieldVal)
-		switch fieldVal.Kind() {
-		case reflect.Bool:
-			fieldVal.SetBool(val)
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			if val {
-				fieldVal.SetInt(1)
-			} else {
-				fieldVal.SetInt(0)
-			}
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			if val {
-				fieldVal.SetUint(1)
-			} else {
-				fieldVal.SetUint(0)
-			}
-		default:
-			return fmt.Errorf("field %q should have type bool", field)
-		}
-	case *integer:
-		fieldVal := setPtr(fieldVal)
-		switch fieldVal.Kind() {
-		case reflect.Float32, reflect.Float64:
-			fieldVal.SetFloat(float64(val.sgn) * float64(val.n))
-			return nil
-		}
-		min, max, ok := intLimits(fieldVal.Kind())
-		if !ok {
-			return fmt.Errorf("field %q should have type int", field)
-		}
-		if val.sgn < 0 && val.n > min || val.sgn > 0 && val.n > max {
-			return fmt.Errorf("number %d is out of range for %s", val, fieldVal.Kind())
-		}
-		if min == 0 { // unsigned
-			fieldVal.SetUint(val.n)
+func (p *parser) unpackBool(fieldVal reflect.Value, b bool, field []byte) error {
+	fieldVal = setPtr(fieldVal)
+	switch fieldVal.Kind() {
+	case reflect.Bool:
+		fieldVal.SetBool(b)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if b {
+			fieldVal.SetInt(1)
 		} else {
-			fieldVal.SetInt(int64(val.sgn) * int64(val.n))
+			fieldVal.SetInt(0)
 		}
-	case float64:
-		fieldVal := setPtr(fieldVal)
-		switch fieldVal.Kind() {
-		case reflect.Float32, reflect.Float64:
-			fieldVal.SetFloat(float64(val))
-		default:
-			return fmt.Errorf("field %q should have type float64 or float32", field)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if b {
+			fieldVal.SetUint(1)
+		} else {
+			fieldVal.SetUint(0)
 		}
-	case string:
-		if _, ok := fieldVal.Interface().(encoding.TextUnmarshaler); ok {
-			if fieldVal.Kind() == reflect.Pointer && fieldVal.IsNil() {
-				fieldVal.Set(reflect.New(fieldVal.Type().Elem()))
-			}
-			return fieldVal.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(val))
-		}
-		if unmarshaler, ok := fieldVal.Addr().Interface().(encoding.TextUnmarshaler); ok {
-			return unmarshaler.UnmarshalText([]byte(val))
-		}
-		fieldVal := setPtr(fieldVal)
-		switch {
-		case fieldVal.Kind() == reflect.String:
-			fieldVal.SetString(val)
-		case fieldVal.Type() == reflect.TypeFor[[]byte]():
-			b, err := base64.StdEncoding.DecodeString(val)
-			if err != nil {
-				return fmt.Errorf("field %q: bad base64", field)
-			}
-			fieldVal.Set(reflect.ValueOf(b))
-		default:
-			return fmt.Errorf("field %q should have type string (got %s)", field, fieldVal.Type())
-		}
-	case map[string]any:
-		fieldVal := setPtr(fieldVal)
-		if fieldVal.Kind() != reflect.Struct {
-			return fmt.Errorf("field %q should have type struct (got %s)", field, fieldVal.Type())
-		}
-		if err := unpackStruct(fieldVal, fieldMap, val); err != nil {
-			return err
-		}
-	case []any:
-		return fmt.Errorf("invalid repeated field")
 	default:
-		return fmt.Errorf("unexpected AST node (unreachable)")
-	}
-	return nil
-}
-
-func unpackStruct(out reflect.Value, fieldMap map[structField]int, msg map[string]any) error {
-	for field, val := range msg {
-		fieldIdx, ok := fieldMap[structField{out.Type(), field}]
-		if !ok {
-			return fmt.Errorf("no field named %q", field)
-		}
-		fieldVal := out.Field(fieldIdx)
-		if fieldVal.Kind() == reflect.Slice && fieldVal.Type() != reflect.TypeFor[[]byte]() {
-			var vals []any
-			if l, ok := val.([]any); ok {
-				vals = l
-			} else {
-				vals = []any{val}
-			}
-			l := reflect.MakeSlice(fieldVal.Type(), len(vals), len(vals))
-			for i, val := range vals {
-				if err := unpackVal(l.Index(i), fieldMap, val, field); err != nil {
-					return err
-				}
-			}
-			if fieldVal.IsNil() {
-				fieldVal.Set(reflect.MakeSlice(fieldVal.Type(), 0, 0))
-			}
-			fieldVal.Set(reflect.AppendSlice(fieldVal, l))
-			continue
-		}
-		if err := unpackVal(fieldVal, fieldMap, val, field); err != nil {
-			return err
-		}
+		return p.error("field %q should have type bool", field)
 	}
 	return nil
 }
@@ -786,9 +749,5 @@ func Unmarshal(data []byte, v any) error {
 	}
 	nextToken, stop := iter.Pull2(tokens(data))
 	defer stop()
-	msg, err := (&parser{nextTok: nextToken, data: data}).parse()
-	if err != nil {
-		return err
-	}
-	return unpackStruct(val.Elem(), fields, msg)
+	return (&parser{nextTok: nextToken, data: data, fieldMap: fields}).parse(val.Elem())
 }
