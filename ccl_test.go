@@ -486,6 +486,12 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "NestedRepeatedNestedType",
 		msg:  `nested_repeated: [[1]]`,
+	}, {
+		desc: "FloatMissingExponent",
+		msg:  `float:1e`,
+	}, {
+		desc: "UnterminatedComment",
+		msg:  `/*`,
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
@@ -733,4 +739,168 @@ func BenchmarkParse(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func FuzzUnmarshal(f *testing.F) {
+	for _, tc := range []string{
+		`
+			# This is a comment
+			string: 'asdf\n' # comment end of line
+			string2: "asdf\n"
+			int: 10
+			float: 10.5e13
+			bool: true
+			bool2: false
+			message { field: 10 }
+			repeated: [1, 2, 3]
+			repeated: 4
+			repeated: [5, 6]
+		`,
+		`string: "strings
+can just span multiple lines"`,
+		`int: 0`,
+		`int: 0xff`,
+		`int: 0XfF`,
+		`int: 0x0f`,
+		`int: -0x0f`,
+		`int: +0x0f`,
+		`float: 1.5e10`,
+		`float: 1.5E10`,
+		`float: -1.5e-10`,
+		`float: +1.5e+10`,
+		`int: 10`,
+		`int: -10`,
+		`int: +10`,
+		`int8:1`,
+		`int16:1`,
+		`int32:1`,
+		`int64:1`,
+		`uint:1`,
+		`uint8:1`,
+		`uint16:1`,
+		`uint32:1`,
+		`uint64:1`,
+		`int:on`,
+		`int:no`,
+		`uint:on`,
+		`uint:no`,
+		`float:-1`,
+		`float:1`,
+		`string: 'asdf'`,
+		`string: "asdf"`,
+		`string: 'ain\'t'`,
+		`string: "won\'t"`,
+		`string: '\"'`,
+		`string: "\""`,
+		`string: "\?"`,
+		`string: '\\'`,
+		`string: '\a'`,
+		`string: '\b'`,
+		`string: '\f'`,
+		`string: '\n'`,
+		`string: '\r'`,
+		`string: '\t'`,
+		`string: '\v'`,
+		`string: '\x0a'`,
+		`string: "\xe4\xb8\x96"`,
+		`string: '\u2014'`,
+		`string: '\U0001f600'`,
+		`string: '\033'`,
+		`message { field: 10 }`,
+		`message {}`,
+		`
+			repeated: 1
+			repeated: 2`,
+		`repeated: [1, 2]`,
+		`repeated: []`,
+		`repeated: 1`,
+		`repeated: [
+			1,
+			2,
+		]`,
+		`repeated_message: [{}]`,
+		`message: /** inline comment **/ {}`,
+		`message: {} // line comment`,
+		`string: 'that'"'"'s cool'`,
+		`string: 'remove newline \
+from string'`,
+		"string: 'remove newline \\\r\nfrom string'",
+		`bytes:"dGVzdA=="`,
+		`bytes_wrapper: [1, 2, 3]`,
+		`time:"2025-10-28T07:41:47Z"`,
+		`time_pointer:"2025-10-28T07:41:47Z"`,
+		`int_pointer: 5`,
+		`repeated_pointer: [1, 2, 3]`,
+		`int: .`,
+		`float:1e+`,
+		`int:0xgg`,
+		`string: '\g'`,
+		`string: "\g"`,
+		"string:'\\\r'",
+		`string:"\x1"`,
+		`string:"\xgg"`,
+		`string:"\u001"`,
+		`string:"\ugggg"`,
+		`string: '`,
+		`string: "`,
+		`10`,
+		`msg {10}`,
+		`repeated []`,
+		`repeated: [1 2]`,
+		`repeated: [asdf]`,
+		`repeated_msg: [{asdf}]`,
+		`int: 0644`,
+		`string: "\777"`,
+		`string: "\x80"`,
+		`string`,
+		`string "abc"`,
+		`int:5 int:6`,
+		`int8:512`,
+		`int8:-512`,
+		`bytes:"dGVzdAo"`,
+		`bytes:[1,2,3]`,
+		`asdfasdfasdf:"asdf"`,
+		`repeated: [[1]]`,
+		`nested_repeated: [[1]]`,
+		`float:1e`,
+		`/*`,
+	} {
+		f.Add([]byte(tc))
+	}
+	f.Fuzz(func(t *testing.T, input []byte) {
+		type byteSliceWrapper []byte
+		type nestedMessage struct {
+			Field int64 `ccl:"field"`
+		}
+		var message struct {
+			String          string           `ccl:"string"`
+			String2         string           `ccl:"string2"`
+			Int             int              `ccl:"int"`
+			Int8            int8             `ccl:"int8"`
+			Int16           int16            `ccl:"int16"`
+			Int32           int32            `ccl:"int32"`
+			Int64           int64            `ccl:"int64"`
+			Uint            uint             `ccl:"uint"`
+			Uint8           uint8            `ccl:"uint8"`
+			Uint16          uint16           `ccl:"uint16"`
+			Uint32          uint32           `ccl:"uint32"`
+			Uint64          uint64           `ccl:"uint64"`
+			Float           float64          `ccl:"float"`
+			Bool            bool             `ccl:"bool"`
+			Bool2           bool             `ccl:"bool2"`
+			Message         *nestedMessage   `ccl:"message"`
+			Repeated        []int64          `ccl:"repeated"`
+			RepeatedMessage []*nestedMessage `ccl:"repeated_message"`
+			Bytes           []byte           `ccl:"bytes"`
+			BytesWrapper    byteSliceWrapper `ccl:"bytes_wrapper"`
+			Time            time.Time        `ccl:"time"`
+			TimePointer     *time.Time       `ccl:"time_pointer"`
+			IntPointer      *int             `ccl:"int_pointer"`
+			RepeatedPointer []*int           `ccl:"repeated_pointer"`
+
+			Ignore     map[int]int `ccl:"-,"` // unlike JSON this also means ignore
+			unexported int64
+		}
+		Unmarshal(input, &message)
+	})
 }

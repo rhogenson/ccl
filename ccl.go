@@ -306,7 +306,7 @@ func checkNum(b []byte) bool {
 		return true
 	}
 	b = b[1:]
-	if len(b) > 0 && b[0] == '-' || b[0] == '+' {
+	if len(b) > 0 && (b[0] == '-' || b[0] == '+') {
 		b = b[1:]
 	}
 	if len(b) == 0 {

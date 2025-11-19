@@ -2,6 +2,7 @@ package ccl
 
 import (
 	"bytes"
+	"fmt"
 	"unicode"
 	"unicode/utf8"
 )
@@ -26,7 +27,8 @@ func (l *lexer) yield(n int) token {
 	return t
 }
 
-func (l *lexer) skipSpace() {
+func (l *lexer) skipSpace() error {
+Space:
 	for l.i < len(l.data) {
 		if bytes.HasPrefix(l.data[l.i:], []byte("#")) || bytes.HasPrefix(l.data[l.i:], []byte("//")) {
 			for ; l.i < len(l.data) && l.data[l.i] != '\n'; l.i++ {
@@ -34,10 +36,13 @@ func (l *lexer) skipSpace() {
 			continue
 		}
 		if bytes.HasPrefix(l.data[l.i:], []byte("/*")) {
-			for ; l.i < len(l.data) && !bytes.HasPrefix(l.data[l.i:], []byte("*/")); l.i++ {
+			for ; l.i < len(l.data); l.i++ {
+				if bytes.HasPrefix(l.data[l.i:], []byte("*/")) {
+					l.i += 2
+					continue Space
+				}
 			}
-			l.i += 2
-			continue
+			return fmt.Errorf("unterminated comment")
 		}
 		if r, n := utf8.DecodeRune(l.data[l.i:]); unicode.IsSpace(r) {
 			l.i += n
@@ -45,6 +50,7 @@ func (l *lexer) skipSpace() {
 		}
 		break
 	}
+	return nil
 }
 
 func numFirstByte(b byte) bool {
@@ -72,7 +78,9 @@ func fieldTailByte(b byte) bool {
 }
 
 func (l *lexer) next() (token, error) {
-	l.skipSpace()
+	if err := l.skipSpace(); err != nil {
+		return token{}, err
+	}
 	if l.i == len(l.data) {
 		return token{}, errEOF
 	}
