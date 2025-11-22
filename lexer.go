@@ -2,7 +2,6 @@ package ccl
 
 import (
 	"bytes"
-	"fmt"
 	"unicode"
 	"unicode/utf8"
 )
@@ -36,13 +35,13 @@ Space:
 			continue
 		}
 		if bytes.HasPrefix(l.data[l.i:], []byte("/*")) {
-			for ; l.i < len(l.data); l.i++ {
-				if bytes.HasPrefix(l.data[l.i:], []byte("*/")) {
-					l.i += 2
+			for i := l.i; i < len(l.data); i++ {
+				if bytes.HasPrefix(l.data[i:], []byte("*/")) {
+					l.i = i + 2
 					continue Space
 				}
 			}
-			return fmt.Errorf("unterminated comment")
+			return l.error("unterminated comment")
 		}
 		if r, n := utf8.DecodeRune(l.data[l.i:]); unicode.IsSpace(r) {
 			l.i += n
