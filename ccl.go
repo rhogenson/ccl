@@ -96,23 +96,17 @@
 //
 // # Bool
 //
-// Bool values can be true or false (classic), and are written using one of the
-// below strings.
+// Bool values can be true or false (classic).
 //
 //	true
-//	yes
-//	on
-//
 //	false
-//	no
-//	off
 //
 // # Lists
 //
 // Lists are written with square brackets and elements are separated by comma.
 //
 //	[1, 2, 3]
-//	[{nested: "messages"}, {are: "also"}, {allowed: yes}]
+//	[{nested: "messages"}, {are: "also"}, {allowed: "yep"}]
 //
 // Trailing comma is allowed
 //
@@ -531,9 +525,9 @@ func (p *parser) parseVal(fieldVal reflect.Value, tok, field []byte) error {
 		return nil
 	}
 	switch string(tok) {
-	case "true", "yes", "on":
+	case "true":
 		return p.unpackBool(fieldVal, true, field)
-	case "false", "no", "off":
+	case "false":
 		return p.unpackBool(fieldVal, false, field)
 	}
 	if bytes.ContainsAny(tok, ".eE") {

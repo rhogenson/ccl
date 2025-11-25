@@ -270,8 +270,8 @@ can just span multiple lines"`,
 	}, {
 		desc: "Repeated",
 		msg: `
-					repeated: 1
-					repeated: 2`,
+			repeated: 1
+			repeated: 2`,
 		want: message{Repeated: []int64{1, 2}},
 	}, {
 		desc: "RepeatedList",
@@ -288,9 +288,9 @@ can just span multiple lines"`,
 	}, {
 		desc: "RepeatedListTrailingComma",
 		msg: `repeated: [
-					1,
-					2,
-				]`,
+			1,
+			2,
+		]`,
 		want: message{Repeated: []int64{1, 2}},
 	}, {
 		desc: "ListOfMessage",
@@ -530,11 +530,11 @@ func TestUnmarshal_InvalidType(t *testing.T) {
 		out:  new(struct{ Field struct{ Field int64 } }),
 	}, {
 		desc: "True",
-		msg:  `F:on`,
+		msg:  `F:true`,
 		out:  new(struct{ F string }),
 	}, {
 		desc: "False",
-		msg:  `F:no`,
+		msg:  `F:false`,
 		out:  new(struct{ F string }),
 	}, {
 		desc: "List",
@@ -542,7 +542,7 @@ func TestUnmarshal_InvalidType(t *testing.T) {
 		out:  new(struct{ F int64 }),
 	}, {
 		desc: "RepeatedBool",
-		msg:  `F:on F:no`,
+		msg:  `F:true F:false`,
 		out:  new(struct{ F []string }),
 	}, {
 		desc: "String",
@@ -591,25 +591,25 @@ func TestUnmarshal_InvalidType(t *testing.T) {
 		out:  new(struct{ F int }),
 	}, {
 		desc: "IntTrue",
-		msg:  `int:on`,
+		msg:  `int:true`,
 		out: new(struct {
 			F int `ccl:"int"`
 		}),
 	}, {
 		desc: "IntFalse",
-		msg:  `int:no`,
+		msg:  `int:false`,
 		out: new(struct {
 			F int `ccl:"int"`
 		}),
 	}, {
 		desc: "UintTrue",
-		msg:  `uint:on`,
+		msg:  `uint:true`,
 		out: new(struct {
 			F uint `ccl:"uint"`
 		}),
 	}, {
 		desc: "UintFalse",
-		msg:  `uint:no`,
+		msg:  `uint:false`,
 		out: new(struct {
 			F uint `ccl:"uint"`
 		}),
@@ -662,8 +662,8 @@ func ExampleUnmarshal() {
 		    location {
 		        path: "/.well-known/acme-challenge/"
 		        root: "/var/lib/acme/acme-challenge"
-		        auth_basic: off
-		        auth_request: off
+		        auth_basic: false
+		        auth_request: false
 		    }
 		}
 	`)

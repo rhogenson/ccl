@@ -16,8 +16,8 @@ how hard can writing a recursive-descent parser be...
         location {
             path: "/.well-known/acme-challenge/"
             root: "/var/lib/acme/acme-challenge"
-            auth_basic: off
-            auth_request: off
+            auth_basic: false
+            auth_request: false
         }
     }
 
