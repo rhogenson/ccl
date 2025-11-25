@@ -447,7 +447,7 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 		escaped = append(escaped, b...)
 	}
 	if !utf8.Valid(escaped) {
-		return nil, p.error("syntax error: string %q is not UTF-8 encoded", escaped)
+		return nil, p.error("string %q is not UTF-8 encoded", escaped)
 	}
 	return escaped, nil
 }
