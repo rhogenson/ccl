@@ -709,10 +709,18 @@ func (p *parser) unpackBool(fieldVal reflect.Value, b bool, field []byte) error 
 //	key1: "val1"
 //	key2: "val2"
 //
-// The exact semantics of which ccl types map to which Go types is a bit
-// complicated and I don't feel like writing out all the rules, so suffice it
-// to say that the usual stuff should work. As a special case, a []byte field
-// expects a base64-encoded string.
+// The following rules describe how ccl types are mapped to Go types:
+//
+//   - For a pointer type, the field will be set to a non-nil value and the
+//     value will be unmarshaled into the inner type.
+//   - A number can be unmarshaled into any integral type (i.e. int, uint,
+//     int8, etc.), float32 or float64. If the number has a fractional part or
+//     exponent, then only float32 and float64 are allowed.
+//   - A boolean must be unmarshaled as bool
+//   - A list must be unmarshaled into a slice where the slice element type
+//     matches the inner values inside the list.
+//   - A message is unmarshaled into a struct where the fields of the struct
+//     match the message fields.
 //
 // You can override a field's name using a struct tag "ccl", for example
 //
@@ -722,9 +730,11 @@ func (p *parser) unpackBool(fieldVal reflect.Value, b bool, field []byte) error 
 //
 // This message could decode, for example `my_field:5`
 //
-// If a field has type T where T or *T implements [encoding.TextUnmarshaler],
-// then a string value will be decoded by calling UnmarshalText. No other
-// customization is supported, this isn't encoding/json.
+// A ccl string field can be decoded into a string or []byte, where []byte
+// expects a base64-encoded string. If a field has type T where T or *T
+// implements [encoding.TextUnmarshaler], then a string value will be decoded
+// by calling UnmarshalText. No other customization is supported, this
+// isn't encoding/json.
 func Unmarshal(data []byte, v any) error {
 	val := reflect.ValueOf(v)
 	if val.Kind() != reflect.Pointer || val.IsNil() || val.Type().Elem().Kind() != reflect.Struct {
