@@ -260,6 +260,14 @@ can just span multiple lines"`,
 		msg:  `string: '\033'`,
 		want: message{String: "\033"},
 	}, {
+		desc: "StringStripCarriageReturn",
+		msg:  "string:'a\r\nb'",
+		want: message{String: "a\nb"},
+	}, {
+		desc: "StringTab",
+		msg:  "string:'\t'",
+		want: message{String: "\t"},
+	}, {
 		desc: "Message",
 		msg:  `message { field: 10 }`,
 		want: message{Message: &nestedMessage{Field: 10}},
@@ -407,6 +415,12 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "StringBadUnicode",
 		msg:  `string:"\ugggg"`,
+	}, {
+		desc: "StringControlCharacter",
+		msg:  "string:'\a'",
+	}, {
+		desc: "StringCarriageReturnNotFollowedByNewline",
+		msg:  "string:'\r'",
 	}, {
 		desc: "UnterminatedString",
 		msg:  `string: '`,

@@ -42,9 +42,9 @@
 //
 // # Strings
 //
-// Strings are written with " or ' and any sequence of intermediate bytes (with
-// the exception of escape sequences which are described below). Strings must be
-// valid UTF-8 after escape sequences are expanded.
+// Strings are written with " or ' and a (possibly empty) sequence of
+// intervening characters. Strings must be valid UTF-8 after expanding escape
+// sequences (described below).
 //
 //	'asdf'
 //	"that's cool"
@@ -54,6 +54,9 @@
 //
 //	'a multiline
 //	string'
+//
+// Carriage returns (0x0d) are discarded from the string value. If you need a
+// string to contain carriage return, use the \r escape sequence.
 //
 // Backslash characters inside a string are interpreted as an escape sequence.
 // Any escape sequence not described below is an error. The escape sequences
@@ -162,6 +165,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -357,8 +361,16 @@ func (p *parser) parseFloat(nBytes []byte) (float64, error) {
 func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 	var escaped []byte
 	for i := 0; i < len(rawStr); i++ {
+		if i+1 < len(rawStr) && rawStr[i] == '\r' && rawStr[i+1] == '\n' {
+			continue
+		}
 		if rawStr[i] != '\\' {
-			escaped = append(escaped, rawStr[i])
+			r, n := utf8.DecodeRune(rawStr[i:])
+			if r != '\t' && r != '\n' && unicode.IsControl(r) {
+				return nil, p.error("control character %q must be escaped", r)
+			}
+			escaped = append(escaped, rawStr[i:i+n]...)
+			i += n - 1
 			continue
 		}
 		i++
