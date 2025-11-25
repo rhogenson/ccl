@@ -172,22 +172,6 @@ can just span multiple lines"`,
 		msg:  `uint64:1`,
 		want: message{Uint64: 1},
 	}, {
-		desc: "IntTrue",
-		msg:  `int:on`,
-		want: message{Int: 1},
-	}, {
-		desc: "IntFalse",
-		msg:  `int:no`,
-		want: message{Int: 0},
-	}, {
-		desc: "UintTrue",
-		msg:  `uint:on`,
-		want: message{Uint: 1},
-	}, {
-		desc: "UintFalse",
-		msg:  `uint:no`,
-		want: message{Uint: 0},
-	}, {
 		desc: "IntFloat",
 		msg:  `float:-1`,
 		want: message{Float: -1},
@@ -605,6 +589,30 @@ func TestUnmarshal_InvalidType(t *testing.T) {
 		desc: "RepeatedSingular",
 		msg:  `F:[1]`,
 		out:  new(struct{ F int }),
+	}, {
+		desc: "IntTrue",
+		msg:  `int:on`,
+		out: new(struct {
+			F int `ccl:"int"`
+		}),
+	}, {
+		desc: "IntFalse",
+		msg:  `int:no`,
+		out: new(struct {
+			F int `ccl:"int"`
+		}),
+	}, {
+		desc: "UintTrue",
+		msg:  `uint:on`,
+		out: new(struct {
+			F uint `ccl:"uint"`
+		}),
+	}, {
+		desc: "UintFalse",
+		msg:  `uint:no`,
+		out: new(struct {
+			F uint `ccl:"uint"`
+		}),
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()

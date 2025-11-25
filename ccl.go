@@ -687,24 +687,10 @@ func intLimits(kind reflect.Kind) (min, max uint64, ok bool) {
 
 func (p *parser) unpackBool(fieldVal reflect.Value, b bool, field []byte) error {
 	fieldVal = setPtr(fieldVal)
-	switch fieldVal.Kind() {
-	case reflect.Bool:
-		fieldVal.SetBool(b)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if b {
-			fieldVal.SetInt(1)
-		} else {
-			fieldVal.SetInt(0)
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if b {
-			fieldVal.SetUint(1)
-		} else {
-			fieldVal.SetUint(0)
-		}
-	default:
+	if fieldVal.Kind() != reflect.Bool {
 		return p.error("field %q should have type bool", field)
 	}
+	fieldVal.SetBool(b)
 	return nil
 }
 
