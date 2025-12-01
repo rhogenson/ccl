@@ -60,7 +60,7 @@
 //
 // Backslash characters inside a string are interpreted as an escape sequence.
 // Any escape sequence not described below is an error. The escape sequences
-// are identical to C11, with the exception that \x always takes exactly 2
+// are identical to C11, with the exception that \x takes at most 2
 // hex characters.
 //
 //	\'    single quote       0x27
@@ -409,14 +409,17 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 			}
 		case 'x':
 			i++
-			if i+2 > len(rawStr) {
-				return nil, p.error("invalid hex escape %q", rawStr[i-2:min(i+2, len(rawStr))])
+			end := i
+			for ; end < i+2 && end < len(rawStr) && ('0' <= rawStr[end] && rawStr[end] <= '9' || 'a' <= rawStr[end] && rawStr[end] <= 'f' || 'A' <= rawStr[end] && rawStr[end] <= 'F'); end++ {
 			}
-			n, err := strconv.ParseUint(string(rawStr[i:i+2]), 16, 8)
+			if end == i {
+				return nil, p.error("invalid hex escape %q", rawStr[i-2:end])
+			}
+			n, err := strconv.ParseUint(string(rawStr[i:end]), 16, 8)
 			if err != nil {
-				return nil, p.error("invalid hex escape %q: %s", rawStr[i-2:i+2], err)
+				return nil, p.error("invalid hex escape %q (unreachable)", rawStr[i-2:end])
 			}
-			i++
+			i = end - 1
 			b = []byte{byte(n)}
 		case 'u', 'U':
 			nBytes := 4
@@ -434,14 +437,17 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 			i += nBytes - 1
 			b = utf8.AppendRune(nil, rune(n))
 		default:
-			if i+3 > len(rawStr) {
+			end := i
+			for ; end < i+3 && end < len(rawStr) && '0' <= rawStr[end] && rawStr[end] <= '7'; end++ {
+			}
+			if end == i {
 				return nil, p.error("invalid string escape %q", rawStr[i-1:i+1])
 			}
-			n, err := strconv.ParseUint(string(rawStr[i:i+3]), 8, 8)
+			n, err := strconv.ParseUint(string(rawStr[i:end]), 8, 8)
 			if err != nil {
-				return nil, p.error("invalid octal escape %q: %s", rawStr[i-1:i+3], err)
+				return nil, p.error("invalid octal escape %q: %s", rawStr[i-1:end], err)
 			}
-			i += 2
+			i = end - 1
 			b = []byte{byte(n)}
 		}
 		escaped = append(escaped, b...)

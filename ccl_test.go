@@ -260,6 +260,26 @@ can just span multiple lines"`,
 		msg:  `string: '\033'`,
 		want: message{String: "\033"},
 	}, {
+		desc: "StringOctalOne",
+		msg:  `string:'\0asdf'`,
+		want: message{String: "\x00asdf"},
+	}, {
+		desc: "StringOctalTwo",
+		msg:  `string:'\33['`,
+		want: message{String: "\033["},
+	}, {
+		desc: "StringOctalFour",
+		msg:  `string:'\1234'`,
+		want: message{String: "\1234"},
+	}, {
+		desc: "StringHexOne",
+		msg:  `string:'\xfhello'`,
+		want: message{String: "\x0fhello"},
+	}, {
+		desc: "StringHexThree",
+		msg:  `string:'\x0ff'`,
+		want: message{String: "\x0ff"},
+	}, {
 		desc: "StringStripCarriageReturn",
 		msg:  "string:'a\r\nb'",
 		want: message{String: "a\nb"},
@@ -403,9 +423,6 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	}, {
 		desc: "StringBadReturnEscape",
 		msg:  "string:'\\\r'",
-	}, {
-		desc: "StringShortHex",
-		msg:  `string:"\x1"`,
 	}, {
 		desc: "StringBadHex",
 		msg:  `string:"\xgg"`,
