@@ -718,7 +718,7 @@ func BenchmarkLex(b *testing.B) {
 	for b.Loop() {
 		l := &lexer{data: msg}
 		for {
-			_, err := l.next()
+			_, _, err := l.next()
 			if err != nil {
 				if err == errEOF {
 					break

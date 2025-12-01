@@ -258,13 +258,13 @@ func (p *parser) peek() ([]byte, error) {
 	if p.err != nil || p.tok != nil {
 		return p.tok, p.err
 	}
-	tok, err := p.lexer.next()
+	i, tok, err := p.lexer.next()
 	if err != nil {
 		p.err = err
 		return nil, p.err
 	}
-	p.tok = tok.b
-	p.i = tok.i
+	p.i = i
+	p.tok = tok
 	return p.tok, nil
 }
 

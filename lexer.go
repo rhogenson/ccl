@@ -6,11 +6,6 @@ import (
 	"unicode/utf8"
 )
 
-type token struct {
-	i int
-	b []byte
-}
-
 type lexer struct {
 	data []byte
 	i    int
@@ -20,10 +15,10 @@ func (l *lexer) error(reason string, args ...any) error {
 	return newSyntaxError(l.data, l.i, reason, args...)
 }
 
-func (l *lexer) yield(n int) token {
-	t := token{l.i, l.data[l.i : l.i+n]}
+func (l *lexer) yield(n int) (int, []byte, error) {
+	i := l.i
 	l.i += n
-	return t
+	return i, l.data[i : i+n], nil
 }
 
 func (l *lexer) skipSpace() error {
@@ -76,12 +71,12 @@ func fieldTailByte(b byte) bool {
 		'0' <= b && b <= '9'
 }
 
-func (l *lexer) next() (token, error) {
+func (l *lexer) next() (int, []byte, error) {
 	if err := l.skipSpace(); err != nil {
-		return token{}, err
+		return 0, nil, err
 	}
 	if l.i == len(l.data) {
-		return token{}, errEOF
+		return 0, nil, errEOF
 	}
 	switch l.data[l.i] {
 	case
@@ -92,7 +87,7 @@ func (l *lexer) next() (token, error) {
 		':',
 		',':
 
-		return l.yield(1), nil
+		return l.yield(1)
 	case '\'', '"':
 		q := l.data[l.i]
 		i := l.i + 1
@@ -102,21 +97,21 @@ func (l *lexer) next() (token, error) {
 			}
 		}
 		if i >= len(l.data) {
-			return token{}, l.error("unterminated string")
+			return 0, nil, l.error("unterminated string")
 		}
-		return l.yield(i + 1 - l.i), nil
+		return l.yield(i + 1 - l.i)
 	}
 	switch b := l.data[l.i]; {
 	case numFirstByte(b):
 		i := l.i + 1
 		for ; i < len(l.data) && numTailByte(l.data[i]); i++ {
 		}
-		return l.yield(i - l.i), nil
+		return l.yield(i - l.i)
 	case fieldFirstByte(b):
 		i := l.i + 1
 		for ; i < len(l.data) && fieldTailByte(l.data[i]); i++ {
 		}
-		return l.yield(i - l.i), nil
+		return l.yield(i - l.i)
 	}
-	return token{}, l.error("invalid lexeme")
+	return 0, nil, l.error("invalid lexeme")
 }
