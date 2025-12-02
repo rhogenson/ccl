@@ -150,9 +150,11 @@
 //	  key: [1, 2, 3, 4, 5, 6]
 //	}
 //
-// # Disclaimer
+// # Security
 //
-// This package is still experimental, expect breaking changes.
+// This package is not designed to be hardened against adversarial inputs.
+// Unmarshal may consume significant resources and should only be called on
+// trusted hand-written configuration files.
 package ccl
 
 import (
