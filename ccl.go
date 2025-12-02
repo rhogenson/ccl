@@ -268,13 +268,21 @@ func (p *parser) peek() ([]byte, error) {
 	return p.tok, nil
 }
 
-func (p *parser) next() ([]byte, error) {
+func (p *parser) nextEOF() ([]byte, error) {
 	tok, err := p.peek()
 	if err != nil {
 		return nil, err
 	}
 	p.tok = nil
 	return tok, nil
+}
+
+func (p *parser) next() ([]byte, error) {
+	tok, err := p.nextEOF()
+	if err == errEOF {
+		return nil, newSyntaxError(p.data, len(p.data), "premature EOF")
+	}
+	return tok, err
 }
 
 func checkNum(b []byte) bool {
@@ -342,7 +350,7 @@ func (p *parser) parseInt(numBytes []byte) (integer, error) {
 	}
 	un, err := strconv.ParseUint(string(n), 10, 64)
 	if err != nil {
-		return integer{}, p.error("invalid number (unreachable)")
+		return integer{}, p.error("(unreachable) invalid number: %s", err)
 	}
 	return integer{un, sgn}, nil
 }
@@ -353,14 +361,16 @@ func (p *parser) parseFloat(nBytes []byte) (float64, error) {
 	}
 	n, err := strconv.ParseFloat(string(nBytes), 64)
 	if err != nil {
-		return 0, p.error("invalid number (unreachable)")
+		return 0, p.error("(unreachable) invalid number: %s", err)
 	}
 	return n, nil
 }
 
 func (p *parser) unescape(rawStr []byte) ([]byte, error) {
+	tokStart := p.i
 	var escaped []byte
 	for i := 0; i < len(rawStr); i++ {
+		p.i++
 		if i+1 < len(rawStr) && rawStr[i] == '\r' && rawStr[i+1] == '\n' {
 			continue
 		}
@@ -417,7 +427,7 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 			}
 			n, err := strconv.ParseUint(string(rawStr[i:end]), 16, 8)
 			if err != nil {
-				return nil, p.error("invalid hex escape %q (unreachable)", rawStr[i-2:end])
+				return nil, p.error("(unreachable) invalid hex escape %q: %s", rawStr[i-2:end], err)
 			}
 			i = end - 1
 			b = []byte{byte(n)}
@@ -452,6 +462,7 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 		}
 		escaped = append(escaped, b...)
 	}
+	p.i = tokStart
 	if !utf8.Valid(escaped) {
 		return nil, p.error("string %q is not UTF-8 encoded", escaped)
 	}
@@ -490,21 +501,6 @@ func (p *parser) parseMessage(out reflect.Value, field []byte) error {
 			return err
 		}
 	}
-}
-
-func (p *parser) parsePossiblyRepeatedVal(fieldVal reflect.Value, parsedFields map[string]bool, tok, field []byte) error {
-	if fieldVal.Kind() == reflect.Slice && fieldVal.Type() != reflect.TypeFor[[]byte]() {
-		if tok[0] == '[' {
-			return p.parseList(fieldVal, field)
-		}
-		fieldVal.Set(reflect.Append(fieldVal, reflect.Zero(fieldVal.Type().Elem())))
-		return p.parseVal(fieldVal.Index(fieldVal.Len()-1), tok, field)
-	}
-	if parsedFields[string(field)] {
-		return p.error("duplicate field %q but type is not repeated", field)
-	}
-	parsedFields[string(field)] = true
-	return p.parseVal(fieldVal, tok, field)
 }
 
 func (p *parser) parseVal(fieldVal reflect.Value, tok, field []byte) error {
@@ -621,33 +617,41 @@ func (p *parser) parseFieldVal(out reflect.Value, parsedFields map[string]bool, 
 		return p.error("no field named %q", field)
 	}
 	fieldVal := out.Field(fieldIdx)
+	repeated := fieldVal.Kind() == reflect.Slice && fieldVal.Type() != reflect.TypeFor[[]byte]()
+	if !repeated {
+		if parsedFields[string(field)] {
+			return p.error("duplicate field %q but type is not repeated", field)
+		}
+		parsedFields[string(field)] = true
+	}
 	tok, err := p.next()
 	if err != nil {
 		return err
 	}
 	switch tok[0] {
 	case '{':
-		if err := p.parsePossiblyRepeatedVal(fieldVal, parsedFields, tok, field); err != nil {
-			return err
-		}
 	case ':':
-		tok, err := p.next()
+		tok, err = p.next()
 		if err != nil {
-			return err
-		}
-		if err := p.parsePossiblyRepeatedVal(fieldVal, parsedFields, tok, field); err != nil {
 			return err
 		}
 	default:
 		return p.error("expecting colon")
 	}
-	return nil
+	if repeated {
+		if tok[0] == '[' {
+			return p.parseList(fieldVal, field)
+		}
+		fieldVal.Set(reflect.Append(fieldVal, reflect.Zero(fieldVal.Type().Elem())))
+		return p.parseVal(fieldVal.Index(fieldVal.Len()-1), tok, field)
+	}
+	return p.parseVal(fieldVal, tok, field)
 }
 
 func (p *parser) parse(out reflect.Value) error {
 	seen := make(map[string]bool)
 	for {
-		tok, err := p.next()
+		tok, err := p.nextEOF()
 		if err != nil {
 			if err == errEOF {
 				return nil

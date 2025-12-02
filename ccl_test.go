@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func ptr[T any](v T) *T {
@@ -405,116 +406,162 @@ func TestUnmarshal_Invalid(t *testing.T) {
 	for _, tc := range []struct {
 		desc string
 		msg  string
+		want *syntaxError
 	}{{
 		desc: "BadNum",
 		msg:  `int: .`,
+		want: &syntaxError{line: 1, col: 6},
 	}, {
 		desc: "WeirdNum",
 		msg:  `float:1e+`,
+		want: &syntaxError{line: 1, col: 7},
 	}, {
 		desc: "BadHex",
 		msg:  `int:0xgg`,
+		want: &syntaxError{line: 1, col: 5},
 	}, {
 		desc: "BadStringEscape",
 		msg:  `string: '\g'`,
+		want: &syntaxError{line: 1, col: 10},
 	}, {
 		desc: "BadDoubleStringEscape",
 		msg:  `string: "\g"`,
+		want: &syntaxError{line: 1, col: 10},
 	}, {
 		desc: "StringBadReturnEscape",
 		msg:  "string:'\\\r'",
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "StringBadHex",
 		msg:  `string:"\xgg"`,
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "StringShortUnicode",
 		msg:  `string:"\u001"`,
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "StringBadUnicode",
 		msg:  `string:"\ugggg"`,
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "StringControlCharacter",
 		msg:  "string:'\a'",
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "StringCarriageReturnNotFollowedByNewline",
 		msg:  "string:'\r'",
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "UnterminatedString",
 		msg:  `string: '`,
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "UnterminatedDoubleString",
 		msg:  `string: "`,
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "NoFieldName",
 		msg:  `10`,
+		want: &syntaxError{line: 1, col: 1},
 	}, {
 		desc: "MsgNoFieldName",
 		msg:  `msg {10}`,
+		want: &syntaxError{line: 1, col: 6},
 	}, {
 		desc: "ListMissingColon",
 		msg:  `repeated []`,
+		want: &syntaxError{line: 1, col: 10},
 	}, {
 		desc: "ListMissingComma",
 		msg:  `repeated: [1 2]`,
+		want: &syntaxError{line: 1, col: 14},
 	}, {
 		desc: "ListBadVal",
 		msg:  `repeated: [asdf]`,
+		want: &syntaxError{line: 1, col: 12},
 	}, {
 		desc: "ListBadMsgVal",
 		msg:  `repeated_msg: [{asdf}]`,
+		want: &syntaxError{line: 1, col: 17},
 	}, {
 		desc: "IntLeadingZero",
 		msg:  `int: 0644`,
+		want: &syntaxError{line: 1, col: 6},
 	}, {
 		desc: "InvalidOctal",
 		msg:  `string: "\777"`,
+		want: &syntaxError{line: 1, col: 10},
 	}, {
 		desc: "InvalidUTF8",
 		msg:  `string: "\x80"`,
+		want: &syntaxError{line: 1, col: 9},
 	}, {
 		desc: "FieldMissingVal",
 		msg:  `string`,
+		want: &syntaxError{line: 1, col: 7},
 	}, {
 		desc: "FieldMissingColon",
 		msg:  `string "abc"`,
+		want: &syntaxError{line: 1, col: 8},
 	}, {
 		desc: "Repeated",
 		msg:  `int:5 int:6`,
+		want: &syntaxError{line: 1, col: 7},
 	}, {
 		desc: "IntOutOfRange",
 		msg:  `int8:512`,
+		want: &syntaxError{line: 1, col: 6},
 	}, {
 		desc: "IntOutOfRangeNegative",
 		msg:  `int8:-512`,
+		want: &syntaxError{line: 1, col: 6},
 	}, {
 		desc: "Base64",
 		msg:  `bytes:"dGVzdAo"`,
+		want: &syntaxError{line: 1, col: 7},
 	}, {
 		desc: "NotBase64",
 		msg:  `bytes:[1,2,3]`,
+		want: &syntaxError{line: 1, col: 7},
 	}, {
 		desc: "BadField",
 		msg:  `asdfasdfasdf:"asdf"`,
+		want: &syntaxError{line: 1, col: 1},
 	}, {
 		desc: "NestedRepeated",
 		msg:  `repeated: [[1]]`,
+		want: &syntaxError{line: 1, col: 12},
 	}, {
 		desc: "NestedRepeatedNestedType",
-		msg:  `nested_repeated: [[1]]`,
+		msg:  `nested_repeated: [[{}]]`,
+		want: &syntaxError{line: 1, col: 19},
 	}, {
 		desc: "FloatMissingExponent",
 		msg:  `float:1e`,
+		want: &syntaxError{line: 1, col: 7},
 	}, {
 		desc: "UnterminatedComment",
 		msg:  `/*`,
+		want: &syntaxError{line: 1, col: 1},
+	}, {
+		desc: "BadToken",
+		msg: `###### This is a very important file please do not modify
+#########################################################
+################ The more ## I put the more secure it is######
+int:12345; # oops typo
+`,
+		want: &syntaxError{line: 4, col: 10},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
 
-			var got message
-			err := Unmarshal([]byte(tc.msg), &got)
-			if err == nil {
-				t.Errorf("Unmarshal(%q) returned success, want error", tc.msg)
+			err := Unmarshal([]byte(tc.msg), new(message))
+			got, ok := err.(*syntaxError)
+			if !ok {
+				t.Fatalf("Unmarshal(%q): expected *syntaxError, got error %T %[2]v", tc.msg, err)
+			}
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(syntaxError{}), cmpopts.IgnoreFields(syntaxError{}, "reason")); diff != "" {
+				t.Errorf("Unmarshal(%q) returned unexpected error diff (-want +got):\n%s", tc.msg, diff)
 			}
 		})
 	}
@@ -653,30 +700,6 @@ func TestUnmarshal_InvalidType(t *testing.T) {
 				t.Errorf("Unmarshal(%q) returned %+v, want error", tc.msg, tc.out)
 			}
 		})
-	}
-}
-
-func TestUnmarshal_ErrorLineCol(t *testing.T) {
-	t.Parallel()
-
-	type message struct {
-		Secret int64 `ccl:"secret"`
-	}
-
-	msg := `
-		###### This is a very important file please do not modify
-		#########################################################
-		################ The more ## I put the more secure it is######
-		secret:12345; # oops typo
-	`
-	err := Unmarshal([]byte(msg), new(message))
-	syntaxErr, ok := err.(*syntaxError)
-	if !ok {
-		t.Fatalf("Unmarshal(%q): expected *syntaxError, got error %T %[2]v", msg, err)
-	}
-	want := &syntaxError{line: 5, col: 15}
-	if syntaxErr.line != want.line || syntaxErr.col != want.col {
-		t.Errorf("Unmarshal(%q) returned error %+v, want line %d, col %d", msg, syntaxErr, want.line, want.col)
 	}
 }
 
