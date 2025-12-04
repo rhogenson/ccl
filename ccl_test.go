@@ -412,10 +412,6 @@ func TestUnmarshal_Invalid(t *testing.T) {
 		msg:  `int: .`,
 		want: &syntaxError{line: 1, col: 6},
 	}, {
-		desc: "WeirdNum",
-		msg:  `float:1e+`,
-		want: &syntaxError{line: 1, col: 7},
-	}, {
 		desc: "BadHex",
 		msg:  `int:0xgg`,
 		want: &syntaxError{line: 1, col: 5},
@@ -540,6 +536,10 @@ func TestUnmarshal_Invalid(t *testing.T) {
 		msg:  `float:1e`,
 		want: &syntaxError{line: 1, col: 7},
 	}, {
+		desc: "FloatPositiveMissingExponent",
+		msg:  `float:1e+`,
+		want: &syntaxError{line: 1, col: 7},
+	}, {
 		desc: "UnterminatedComment",
 		msg:  `/*`,
 		want: &syntaxError{line: 1, col: 1},
@@ -551,6 +551,18 @@ func TestUnmarshal_Invalid(t *testing.T) {
 int:12345; # oops typo
 `,
 		want: &syntaxError{line: 4, col: 10},
+	}, {
+		desc: "OutOfRange",
+		msg:  `int:20000000000000000000`,
+		want: &syntaxError{line: 1, col: 5},
+	}, {
+		desc: "FloatRange",
+		msg:  `float:1e309`,
+		want: &syntaxError{line: 1, col: 7},
+	}, {
+		desc: "IntLetter",
+		msg:  `int: 1A`,
+		want: &syntaxError{line: 1, col: 6},
 	}} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
@@ -926,6 +938,9 @@ from string'`,
 		`nested_repeated: [[1]]`,
 		`float:1e`,
 		`/*`,
+		`bytes:100000000000000000000`,
+		`float:1e700`,
+		`float:1A000`,
 	} {
 		f.Add([]byte(tc))
 	}

@@ -310,14 +310,17 @@ func checkNum(b []byte) bool {
 	if !haveDigits {
 		return false
 	}
-	if len(b) == 0 || !(b[0] == 'e' || b[0] == 'E') {
+	if len(b) == 0 {
 		return true
+	}
+	if !(b[0] == 'e' || b[0] == 'E') {
+		return false
 	}
 	b = b[1:]
 	if len(b) > 0 && (b[0] == '-' || b[0] == '+') {
 		b = b[1:]
 	}
-	if len(b) == 0 {
+	if len(b) == 0 || !('1' <= b[0] && b[0] <= '9') {
 		return false
 	}
 	for ; len(b) > 0 && '0' <= b[0] && b[0] <= '9'; b = b[1:] {
@@ -352,7 +355,10 @@ func (p *parser) parseInt(numBytes []byte) (integer, error) {
 	}
 	un, err := strconv.ParseUint(string(n), 10, 64)
 	if err != nil {
-		return integer{}, p.error("(unreachable) invalid number: %s", err)
+		if errors.Is(err, strconv.ErrSyntax) {
+			panic(fmt.Sprintf("Invalid number that wasn't caught by checkNum: %s", err))
+		}
+		return integer{}, p.error("%s", err)
 	}
 	return integer{un, sgn}, nil
 }
@@ -363,7 +369,10 @@ func (p *parser) parseFloat(nBytes []byte) (float64, error) {
 	}
 	n, err := strconv.ParseFloat(string(nBytes), 64)
 	if err != nil {
-		return 0, p.error("(unreachable) invalid number: %s", err)
+		if errors.Is(err, strconv.ErrSyntax) {
+			panic(fmt.Sprintf("Invalid number that wasn't caught by checkNum: %s", err))
+		}
+		return 0, p.error("%s", err)
 	}
 	return n, nil
 }
@@ -429,7 +438,7 @@ func (p *parser) unescape(rawStr []byte) ([]byte, error) {
 			}
 			n, err := strconv.ParseUint(string(rawStr[i:end]), 16, 8)
 			if err != nil {
-				return nil, p.error("(unreachable) invalid hex escape %q: %s", rawStr[i-2:end], err)
+				panic(fmt.Sprintf("Invalid hex escape %q: %s", rawStr[i-2:end], err))
 			}
 			i = end - 1
 			b = []byte{byte(n)}
